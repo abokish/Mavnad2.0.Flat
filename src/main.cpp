@@ -395,6 +395,10 @@ int getSystemStatusCode() {
 
 void PrintSensors(){
   Serial.println("--------------------------------------------");
+  Serial.print(SystemModeHelper::toString(currentSystemMode) + "(" + getSystemStatusCode() + "): ");
+  Serial.print("PWM = " + currentPWMSpeed);
+  Serial.print("; Dampers = " ); Serial.print(currentAirMode == AirValveMode::Open ? "Open" : "Close");
+  Serial.print("; Water = "); Serial.println(currentWatereMode == WateringMode::On ? "Open" : "Close");
   Serial.print(shtSensorsManager.getShtName(shtSensorsManager.LEFT, 1) + ": Temp = " + (String)shtSensorsManager.getTempSht31(shtSensorsManager.LEFT, 1));
   Serial.println("; RH = " + (String)shtSensorsManager.getRHSht31(shtSensorsManager.LEFT, 1));
   Serial.print(shtSensorsManager.getShtName(shtSensorsManager.LEFT, 2) + ": Temp= " + (String)shtSensorsManager.getTempSht31(shtSensorsManager.LEFT, 2));
