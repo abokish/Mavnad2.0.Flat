@@ -560,8 +560,8 @@ void setup() {
   Serial.println("----------------------------------------------------------");
   PrintPartitions();
   Serial.println("----------------------------------------------------------");
-  Serial.println("\n[setup] Welcome to the ThermoTerra whether Controller!");
-  Serial.printf("Firmware version: %s\n", CURRENT_FIRMWARE_VERSION);
+  Serial.println("[Setup] Welcome to the ThermoTerra whether Controller!");
+  Serial.printf("[Setup] Firmware version: %s\n", CURRENT_FIRMWARE_VERSION);
 
   // Relays
   Serial.println("[setup] set relays");
