@@ -34,8 +34,6 @@ const String TOKEN = "pm8z4oxs7awwcx68gwov";
 WiFiClient wiFiClient;
 PubSubClient mqttClient(wiFiClient);
 OTAManager otaManager(mqttClient, CURRENT_FIRMWARE_VERSION, TOKEN);
-unsigned long lastMqttAttempt = 0;
-const unsigned long mqttReconnectInterval = 5000;
 
 const int PIN_FAN_RIGHT1 = 21;
 const int PIN_FAN_RIGHT2 = 47;
@@ -446,29 +444,6 @@ void setupWiFi(unsigned long timeoutMs) {
     }
 }
 
-void connectMQTT() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[MQTT] WiFi is not connecting. aborting");
-    return;
-  }
-
-  if (!mqttClient.connected()) {
-    unsigned long now = millis();
-    if (now - lastMqttAttempt > mqttReconnectInterval) {
-      Serial.print("[MQTT] Connecting...");
-      if (mqttClient.connect("Mavnad001", TOKEN.c_str(), "")) {
-        Serial.println(" connected!");
-        otaManager.subscribeTopics();
-      } else {
-        Serial.printf(" failed, rc=%d\n", mqttClient.state());
-      }
-      lastMqttAttempt = now;
-    }
-  } else {
-    Serial.println("[MQTT] mqttClient is not connected");
-  }
-}
-
 // The method init NTP server and wait until the builtin 
 // RTC will get the current time from the net
 struct tm SetupTime(){
@@ -521,24 +496,6 @@ void logToS3(const String& sensorName, const String& sensorType, const String& s
   );
 }
 
-SystemMode determineSystemMode(const std::vector<ScheduleEntry>& schedule, const tm& timeinfo) {
-  uint8_t currentDOW = timeinfo.tm_wday; // 0=Sunday, 1=Monday, etc.
-  uint16_t currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
-
-  for (const auto& entry : schedule) {
-    if (entry.dayOfWeek != currentDOW) continue;
-
-    uint16_t start = entry.startHour * 60 + entry.startMin;
-    uint16_t end = entry.endHour * 60 + entry.endMin;
-
-    if (currentMinutes >= start && currentMinutes < end) {
-      return entry.mode;
-    }
-  }
-
-  return SystemMode::Stop; // fallback if no match
-}
-
 void PrintPartitions() {
   esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, NULL);
   while (it != NULL) {
@@ -547,6 +504,32 @@ void PrintPartitions() {
                   p->label, p->address, p->size);
     it = esp_partition_next(it);
   }
+}
+
+void sendTelemetry() {
+  // ThingsBoard server
+  otaManager.sendTelemetry("After_Temp", FloatValidityCheck(shtSensorsManager.getAfterTemp()));
+  otaManager.sendTelemetry("After_RH", FloatValidityCheck(shtSensorsManager.getAfterRH()));
+  otaManager.sendTelemetry("Room_Temp", FloatValidityCheck(shtSensorsManager.getRoomTemp()));
+  otaManager.sendTelemetry("Room_RH", FloatValidityCheck(shtSensorsManager.getRoomRH()));
+  otaManager.sendTelemetry("In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
+  otaManager.sendTelemetry("Roof_Top_Temp", FloatValidityCheck(dallas.getTemperature("roof_top")));
+  otaManager.sendTelemetry("System_Status", getSystemStatusCode());
+
+  // S3 server
+  logToS3("After", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getAfterTemp())); 
+  logToS3("After", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getAfterRH()));
+  logToS3("Before", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getBeforeTemp())); 
+  logToS3("Before", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getBeforeRH()));
+  logToS3("Room", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getRoomTemp())); 
+  logToS3("Room", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getRoomRH()));
+  logToS3("Ambiant", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getAmbiantTemp())); 
+  logToS3("Ambiant", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getAmbiantRH()));
+  logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // mode data must be in location "cooler"
+  logToS3("In_Wall", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("in_wall"))); 
+  logToS3("Roof_Top", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("roof_top"))); 
+  delay(300);
+  dataLog->uploadDataFile(SITE_NAME, BUILDING_NAME, "Mavnad1");
 }
 
 
@@ -617,39 +600,13 @@ void setup() {
   mqttClient.setServer(THINGSBOARD_SERVER.c_str(), 1883);
   otaManager.begin();
   if (!mqttClient.connected()) {
-    connectMQTT();
+    otaManager.connectMQTT();
   }
   otaManager.checkAndConfirmOTA();
 
   Serial.println("[setup] setup done successfuly!");
 
   PrintSensors();
-}
-
-void sendTelemetry() {
-  // ThingsBoard server
-  otaManager.sendTelemetry("After_Temp", FloatValidityCheck(shtSensorsManager.getAfterTemp()));
-  otaManager.sendTelemetry("After_RH", FloatValidityCheck(shtSensorsManager.getAfterRH()));
-  otaManager.sendTelemetry("Room_Temp", FloatValidityCheck(shtSensorsManager.getRoomTemp()));
-  otaManager.sendTelemetry("Room_RH", FloatValidityCheck(shtSensorsManager.getRoomRH()));
-  otaManager.sendTelemetry("In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
-  otaManager.sendTelemetry("Roof_Top_Temp", FloatValidityCheck(dallas.getTemperature("roof_top")));
-  otaManager.sendTelemetry("System_Status", getSystemStatusCode());
-
-  // S3 server
-  logToS3("After", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getAfterTemp())); 
-  logToS3("After", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getAfterRH()));
-  logToS3("Before", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getBeforeTemp())); 
-  logToS3("Before", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getBeforeRH()));
-  logToS3("Room", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getRoomTemp())); 
-  logToS3("Room", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getRoomRH()));
-  logToS3("Ambiant", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getAmbiantTemp())); 
-  logToS3("Ambiant", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getAmbiantRH()));
-  logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // mode data must be in location "cooler"
-  logToS3("In_Wall", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("in_wall"))); 
-  logToS3("Roof_Top", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("roof_top"))); 
-  delay(300);
-  dataLog->uploadDataFile(SITE_NAME, BUILDING_NAME, "Mavnad1");
 }
 
 // ==============================================================================
@@ -659,7 +616,7 @@ void loop() {
   tick();
 
   if (!mqttClient.connected()) {
-    connectMQTT();
+    otaManager.connectMQTT();
   }
   mqttClient.loop();
 

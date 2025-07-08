@@ -28,6 +28,29 @@ public:
     subscribeTopics();
   }
 
+  void connectMQTT() {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("[MQTT] WiFi is not connecting. aborting");
+      return;
+    }
+
+    if (!m_mqttClient.connected()) {
+      unsigned long now = millis();
+      if (now - lastMqttAttempt > mqttReconnectInterval) {
+        Serial.print("[MQTT] Connecting...");
+        if (m_mqttClient.connect("", m_token.c_str(), "")) {
+          Serial.println(" connected!");
+          subscribeTopics();
+        } else {
+          Serial.printf(" failed, rc=%d\n", m_mqttClient.state());
+        }
+        lastMqttAttempt = now;
+      }
+    } else {
+      Serial.println("[MQTT] mqttClient is not connected");
+    }
+  }
+
   void checkAndConfirmOTA() {
     esp_ota_img_states_t ota_state;
     if (esp_ota_get_state_partition(NULL, &ota_state) == ESP_OK) {
@@ -80,7 +103,7 @@ public:
           String fwURL = shared["fw_url"] | "";
           size_t fwSize = shared["fw_size"] | 0;
 
-          Serial.printf("[OTA] New firmware %s version %s. Downloading...\n", fwTitle, fwVersion);
+          Serial.printf("[OTA] New firmware %s version %s. Downloading...\n", fwTitle.c_str(), fwVersion.c_str());
           downloadFirmware(fwURL, fwSize, fwChecksum, fwTitle, fwVersion);
         } else {
           Serial.printf("[OTA] Firmware version %s is already installed\n", fwVersion);
@@ -325,6 +348,9 @@ private:
   PubSubClient &m_mqttClient;
   String m_fwVersion;
   String m_token;
+
+  unsigned long lastMqttAttempt = 0;
+  const unsigned long mqttReconnectInterval = 5000;
 
   const char* thingsboard_root_ca_cert = \
 "-----BEGIN CERTIFICATE-----\n"
