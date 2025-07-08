@@ -1,27 +1,41 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <PubSubClient.h>
+#include <LittleFS.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include "SHTManager.h"
 #include "TimeClient.h"
 #include "S3Log.h"
 #include "DallasManager.h"
+#include "OTAManager.h"
+#include "esp_ota_ops.h"
 
 // ===========================
 // Wifi credentials
 // ===========================
-const char* WIFI_SSID = "ThermoTera";
-const char* WIFI_PASSWORD = "Thermo2007";
+const char* WIFI_SSID = "BokishHome"; // "ThermoTera";
+const char* WIFI_PASSWORD = "ShalomShalom"; // "Thermo2007";
 
 // Timezone offset for GMT+3
 const long gmtOffset_sec = 3 * 3600; // 3 hours in seconds
 const int daylightOffset_sec = 0;    // No daylight saving time adjustment
 
-const String SITE_NAME = "Series1";
-const String BUILDING_NAME = "001";
+const String SITE_NAME = "Series1-Testing";
+const String BUILDING_NAME = "Asaf";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
+const String CURRENT_FIRMWARE_VERSION = "1.0.1";
+const String THINGSBOARD_SERVER = "thingsboard.cloud";
+const String TOKEN = "pm8z4oxs7awwcx68gwov";
+
+// Setup ThingsBoard client
+WiFiClient wiFiClient;
+PubSubClient mqttClient(wiFiClient);
+OTAManager otaManager(mqttClient, CURRENT_FIRMWARE_VERSION, TOKEN);
+unsigned long lastMqttAttempt = 0;
+const unsigned long mqttReconnectInterval = 5000;
 
 const int PIN_FAN_RIGHT1 = 21;
 const int PIN_FAN_RIGHT2 = 47;
@@ -432,6 +446,29 @@ void setupWiFi(unsigned long timeoutMs) {
     }
 }
 
+void connectMQTT() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[MQTT] WiFi is not connecting. aborting");
+    return;
+  }
+
+  if (!mqttClient.connected()) {
+    unsigned long now = millis();
+    if (now - lastMqttAttempt > mqttReconnectInterval) {
+      Serial.print("[MQTT] Connecting...");
+      if (mqttClient.connect("Mavnad001", TOKEN.c_str(), "")) {
+        Serial.println(" connected!");
+        otaManager.subscribeTopics();
+      } else {
+        Serial.printf(" failed, rc=%d\n", mqttClient.state());
+      }
+      lastMqttAttempt = now;
+    }
+  } else {
+    Serial.println("[MQTT] mqttClient is not connected");
+  }
+}
+
 // The method init NTP server and wait until the builtin 
 // RTC will get the current time from the net
 struct tm SetupTime(){
@@ -502,7 +539,15 @@ SystemMode determineSystemMode(const std::vector<ScheduleEntry>& schedule, const
   return SystemMode::Stop; // fallback if no match
 }
 
-
+void PrintPartitions() {
+  esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, NULL);
+  while (it != NULL) {
+    const esp_partition_t* p = esp_partition_get(it);
+    Serial.printf("Partition: %s, Offset: 0x%06x, Size: 0x%06x\n",
+                  p->label, p->address, p->size);
+    it = esp_partition_next(it);
+  }
+}
 
 
 void HandleManualControl();
@@ -512,7 +557,11 @@ void HandleManualControl();
 // ==============================================================================
 void setup() {
   Serial.begin(115200);
+  Serial.println("----------------------------------------------------------");
+  PrintPartitions();
+  Serial.println("----------------------------------------------------------");
   Serial.println("\n[setup] Welcome to the ThermoTerra whether Controller!");
+  Serial.printf("Firmware version: %s\n", CURRENT_FIRMWARE_VERSION);
 
   // Relays
   Serial.println("[setup] set relays");
@@ -547,7 +596,7 @@ void setup() {
 
 
   Serial.println("[Setup] Connecting to WiFi");
-  setupWiFi(10000);
+  setupWiFi(30000);
 
   Serial.println("[Setup] Initializing TimeClient");
   struct tm timeInfo = SetupTime();
@@ -564,12 +613,30 @@ void setup() {
   Serial.print("[Setup] Initializing S3Log ");
   dataLog = new S3Log("/log.txt", timeClient);
 
+  Serial.println("[Setup] Initializing ThingsBoard");
+  mqttClient.setServer(THINGSBOARD_SERVER.c_str(), 1883);
+  otaManager.begin();
+  if (!mqttClient.connected()) {
+    connectMQTT();
+  }
+  otaManager.checkAndConfirmOTA();
+
   Serial.println("[setup] setup done successfuly!");
 
   PrintSensors();
 }
 
 void sendTelemetry() {
+  // ThingsBoard server
+  otaManager.sendTelemetry("After_Temp", FloatValidityCheck(shtSensorsManager.getAfterTemp()));
+  otaManager.sendTelemetry("After_RH", FloatValidityCheck(shtSensorsManager.getAfterRH()));
+  otaManager.sendTelemetry("Room_Temp", FloatValidityCheck(shtSensorsManager.getRoomTemp()));
+  otaManager.sendTelemetry("Room_RH", FloatValidityCheck(shtSensorsManager.getRoomRH()));
+  otaManager.sendTelemetry("In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
+  otaManager.sendTelemetry("Roof_Top_Temp", FloatValidityCheck(dallas.getTemperature("roof_top")));
+  otaManager.sendTelemetry("System_Status", getSystemStatusCode());
+
+  // S3 server
   logToS3("After", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getAfterTemp())); 
   logToS3("After", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getAfterRH()));
   logToS3("Before", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getBeforeTemp())); 
@@ -581,7 +648,6 @@ void sendTelemetry() {
   logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // mode data must be in location "cooler"
   logToS3("In_Wall", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("in_wall"))); 
   logToS3("Roof_Top", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("roof_top"))); 
-
   delay(300);
   dataLog->uploadDataFile(SITE_NAME, BUILDING_NAME, "Mavnad1");
 }
@@ -591,6 +657,11 @@ void sendTelemetry() {
 // ==============================================================================
 void loop() {
   tick();
+
+  if (!mqttClient.connected()) {
+    connectMQTT();
+  }
+  mqttClient.loop();
 
   // Every 10 minutes
   if((timeClient->getMinute() % 10) == 0) {
