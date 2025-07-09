@@ -14,21 +14,21 @@
 // ===========================
 // Wifi credentials
 // ===========================
-const char* WIFI_SSID = "BokishHome"; // "ThermoTera";
-const char* WIFI_PASSWORD = "ShalomShalom"; // "Thermo2007";
+const char* WIFI_SSID = "ThermoTera";
+const char* WIFI_PASSWORD = "Thermo2007";
 
 // Timezone offset for GMT+3
 const long gmtOffset_sec = 3 * 3600; // 3 hours in seconds
 const int daylightOffset_sec = 0;    // No daylight saving time adjustment
 
-const String SITE_NAME = "Series1-Testing";
-const String BUILDING_NAME = "Asaf";
+const String SITE_NAME = "Series1";
+const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.1";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2";
 const String THINGSBOARD_SERVER = "thingsboard.cloud";
-const String TOKEN = "pm8z4oxs7awwcx68gwov";
+const String TOKEN = "8sqfmy0fdvacex3ef0mo"; //"pm8z4oxs7awwcx68gwov";
 
 // Setup ThingsBoard client
 WiFiClient wiFiClient;
@@ -162,9 +162,9 @@ float FloatValidityCheck(float value) {
 }
 
 void onFans(int percentage = 100) {
-  debugMessage("on fans");
   if(currentPWMSpeed == percentage) return;
-  Serial.println("[Fans] on " + percentage);
+
+  Serial.printf("[Fans] current pwm = %i; new = %i\n", currentPWMSpeed, percentage);
   int duty = map(percentage, 0, 100, 0, 255);
   ledcWrite(FAN_CHANNEL, duty);
   currentPWMSpeed = percentage;
@@ -315,7 +315,7 @@ void onRegenerate() {
 
   AirValveMode airMode = getAirModeByRoom();
   
-  setSystemMode(airMode, 80, waterMode);
+  setSystemMode(airMode, 90, waterMode);
 
   currentSystemMode = SystemMode::Regenerate;
 }
@@ -405,12 +405,29 @@ int getSystemStatusCode() {
   return status;
 }
 
+String timeToString(struct tm timeInfo) {
+  char buffer[32];
+  sprintf(buffer, "%02d.%02d.%d %02d:%02d:%02d", 
+        timeInfo.tm_mday, 
+        timeInfo.tm_mon + 1, 
+        timeInfo.tm_year + 1900, 
+        timeInfo.tm_hour, 
+        timeInfo.tm_min,
+        timeInfo.tm_sec);
+  return String(buffer);
+}
+
 void PrintSensors(){
   Serial.println("--------------------------------------------");
-  Serial.print(SystemModeHelper::toString(currentSystemMode) + "(" + getSystemStatusCode() + "): ");
-  Serial.print("PWM = " + currentPWMSpeed);
-  Serial.print("; Dampers = " ); Serial.print(currentAirMode == AirValveMode::Open ? "Open" : "Close");
-  Serial.print("; Water = "); Serial.println(currentWatereMode == WateringMode::On ? "Open" : "Close");
+  struct tm localTime;
+  if(getLocalTime(&localTime)) Serial.println(timeToString(localTime));
+  Serial.printf("System mode code %i: Mode = % s; PWM = %i; Water = %s; Dampers = %s\n", 
+              getSystemStatusCode(),
+              SystemModeHelper::toString(currentSystemMode).c_str(),
+              currentPWMSpeed,
+              currentWatereMode == WateringMode::On ? "Open" : "Close",
+              currentAirMode == AirValveMode::Open ? "Open" : "Close");
+
   Serial.print(shtSensorsManager.getShtName(shtSensorsManager.LEFT, 1) + ": Temp = " + (String)shtSensorsManager.getTempSht31(shtSensorsManager.LEFT, 1));
   Serial.println("; RH = " + (String)shtSensorsManager.getRHSht31(shtSensorsManager.LEFT, 1));
   Serial.print(shtSensorsManager.getShtName(shtSensorsManager.LEFT, 2) + ": Temp= " + (String)shtSensorsManager.getTempSht31(shtSensorsManager.LEFT, 2));
@@ -508,8 +525,12 @@ void PrintPartitions() {
 
 void sendTelemetry() {
   // ThingsBoard server
+  otaManager.sendTelemetry("Before_Temp", FloatValidityCheck(shtSensorsManager.getBeforeTemp()));
+  otaManager.sendTelemetry("Before_RH", FloatValidityCheck(shtSensorsManager.getBeforeRH()));
   otaManager.sendTelemetry("After_Temp", FloatValidityCheck(shtSensorsManager.getAfterTemp()));
   otaManager.sendTelemetry("After_RH", FloatValidityCheck(shtSensorsManager.getAfterRH()));
+  otaManager.sendTelemetry("Ambiant_Temp", FloatValidityCheck(shtSensorsManager.getAmbiantTemp()));
+  otaManager.sendTelemetry("Ambiant_RH", FloatValidityCheck(shtSensorsManager.getAmbiantRH()));
   otaManager.sendTelemetry("Room_Temp", FloatValidityCheck(shtSensorsManager.getRoomTemp()));
   otaManager.sendTelemetry("Room_RH", FloatValidityCheck(shtSensorsManager.getRoomRH()));
   otaManager.sendTelemetry("In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
@@ -579,7 +600,7 @@ void setup() {
 
 
   Serial.println("[Setup] Connecting to WiFi");
-  setupWiFi(30000);
+  setupWiFi(10000);
 
   Serial.println("[Setup] Initializing TimeClient");
   struct tm timeInfo = SetupTime();
@@ -717,6 +738,10 @@ void HandleManualControl(){
     }
     else if(input.equalsIgnoreCase("upload")) { // UPLOAD ==============================
       sendTelemetry();  
+    }
+    else if(input.equalsIgnoreCase("restart")) { // RESTART =============================
+      Serial.println("Rebooting...");
+      ESP.restart();
     }
     else {
       Serial.println("No such command. use: print, stop, dampers, pump");
