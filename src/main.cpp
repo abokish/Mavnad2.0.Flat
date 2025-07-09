@@ -536,6 +536,7 @@ void sendTelemetry() {
   otaManager.sendTelemetry("In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
   otaManager.sendTelemetry("Roof_Top_Temp", FloatValidityCheck(dallas.getTemperature("roof_top")));
   otaManager.sendTelemetry("System_Status", getSystemStatusCode());
+  delay(300);
 
   // S3 server
   logToS3("After", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getAfterTemp())); 
