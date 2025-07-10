@@ -324,7 +324,7 @@ void setSystemMode(AirValveMode airMode, int fanPercentage = 100, WateringMode w
 void onCool() {
   debugMessage("on cool");
   AirValveMode airMode = getAirModeByRoom();
-  setSystemMode(airMode, 80, WateringMode::Off);
+  setSystemMode(airMode, 50, WateringMode::Off);
 
   currentSystemMode = SystemMode::Cool;
 }

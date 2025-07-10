@@ -87,35 +87,41 @@ public:
       return;
     }
 
-    Serial.println("[MQTT] Incoming message:");
-    serializeJsonPretty(doc, Serial);
-    Serial.println();
+    // Serial.println("[MQTT] Incoming message:");
+    // serializeJsonPretty(doc, Serial);
+    // Serial.println();
 
+    JsonObject shared;
     if (doc["shared"].is<JsonObject>()) {
-      JsonObject shared = doc["shared"];
-
-      if (shared["fw_version"].is<String>()) {
-        String fwVersion = shared["fw_version"] | "";
-
-        if (fwVersion.length() > 0 && fwVersion != m_fwVersion) {
-          String fwTitle = shared["fw_title"] | ""; 
-          String fwChecksum = shared["fw_checksum"] | "";
-          String fwURL = shared["fw_url"] | "";
-          size_t fwSize = shared["fw_size"] | 0;
-
-          Serial.printf("[OTA] New firmware %s version %s. Downloading...\n", fwTitle.c_str(), fwVersion.c_str());
-          downloadFirmware(fwURL, fwSize, fwChecksum, fwTitle, fwVersion);
-        } else {
-          Serial.printf("[OTA] Firmware version %s is already installed\n", fwVersion);
-        }
-      } else {
-        Serial.println("[OTA] bad fw_version in shared");
-      }
+      shared = doc["shared"].as<JsonObject>(); // Push
     } else {
-      Serial.println("[OTA] No shared object found");
+      shared = doc.as<JsonObject>();           // Pull
     }
 
-    // === Keep existing systemConfig handling ===
+    if (shared.isNull()) {
+      Serial.println("[OTA] No shared firmware attributes found.");
+      return;
+    }
+
+    if (shared["fw_version"].is<String>()) {
+      String fwVersion = shared["fw_version"] | "";
+
+      if (fwVersion.length() > 0 && fwVersion != m_fwVersion) {
+        String fwTitle = shared["fw_title"] | ""; 
+        String fwChecksum = shared["fw_checksum"] | "";
+        String fwURL = shared["fw_url"] | "";
+        size_t fwSize = shared["fw_size"] | 0;
+
+        Serial.printf("[OTA] New firmware %s version %s. Downloading...\n", fwTitle.c_str(), fwVersion.c_str());
+        downloadFirmware(fwURL, fwSize, fwChecksum, fwTitle, fwVersion);
+      } else {
+        Serial.printf("[OTA] Firmware version %s is already installed\n", fwVersion);
+      }
+    } else {
+      Serial.println("[OTA] bad fw_version in shared");
+    }
+
+    // === SystemConfig handling ===
     if (doc["systemConfig"].is<JsonVariant>()) {
       String configJson;
       serializeJson(doc["systemConfig"], configJson);
@@ -123,7 +129,6 @@ public:
       saveConfig(configJson);
     }
   }
-
 
   void saveConfig(const String& configJson) {
     Serial.println("[OTA] Saving config to /config.json...");
