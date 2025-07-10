@@ -105,11 +105,34 @@ struct ScheduleEntry {
 };
 
 std::vector<ScheduleEntry> modeSchedule = {
-  { 5, 10,  0, 16,  00, SystemMode::Cool },      // Friday 10:00–16:00
-  { 6, 10,  0, 16,  0, SystemMode::Cool },      // Saturday 10:00–16:00
-  { 0,  0,  0,  7,  0, SystemMode::Regenerate }, // Sunday 00:00–07:00
-  { 0, 10,  0, 16,  0, SystemMode::Cool },      // Sunday 10:00–16:00
-  { 1, 10,  0, 16,  0, SystemMode::Cool },      // Monday 10:00–16:00
+  // Sunday
+  { 0,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  { 0, 10,  0, 16,  0, SystemMode::Cool },      
+  { 0, 22,  0, 23, 59, SystemMode::Regenerate },
+  // Monday 
+  { 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  { 1, 10,  0, 16,  0, SystemMode::Cool },      
+  { 1, 22,  0, 23, 59, SystemMode::Regenerate },
+  // Tuesday 
+  { 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  { 2, 10,  0, 16,  0, SystemMode::Cool },      
+  { 2, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  // Wednesday
+  { 3,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  { 3, 10,  0, 16,  0, SystemMode::Cool },      
+  { 3, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  // Thursday
+  { 4,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  { 4, 10,  0, 16,  0, SystemMode::Cool },      
+  { 4, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  // Friday
+  { 5,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  { 5, 10,  0, 16,  0, SystemMode::Cool },      
+  { 5, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  // Saturday
+  { 6,  0,  0,  6,  0, SystemMode::Regenerate },
+  { 6, 10,  0, 16,  0, SystemMode::Cool },      
+  { 6, 22,  0, 23, 59, SystemMode::Regenerate } 
   // Add more days as needed
 };
 
