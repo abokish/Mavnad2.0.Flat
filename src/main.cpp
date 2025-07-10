@@ -26,9 +26,9 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.2";
 const String THINGSBOARD_SERVER = "thingsboard.cloud";
-const String TOKEN = "8sqfmy0fdvacex3ef0mo"; //"pm8z4oxs7awwcx68gwov";
+const String TOKEN = "8sqfmy0fdvacex3ef0mo"; //"pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
 // Setup ThingsBoard client
 WiFiClient wiFiClient;
@@ -107,31 +107,31 @@ struct ScheduleEntry {
 std::vector<ScheduleEntry> modeSchedule = {
   // Sunday
   { 0,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 0, 10,  0, 16,  0, SystemMode::Cool },      
+  { 0, 10,  0, 19,  0, SystemMode::Cool },      
   { 0, 22,  0, 23, 59, SystemMode::Regenerate },
   // Monday 
   { 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 1, 10,  0, 16,  0, SystemMode::Cool },      
+  { 1, 10,  0, 19,  0, SystemMode::Cool },      
   { 1, 22,  0, 23, 59, SystemMode::Regenerate },
   // Tuesday 
   { 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 2, 10,  0, 16,  0, SystemMode::Cool },      
+  { 2, 10,  0, 19,  0, SystemMode::Cool },      
   { 2, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Wednesday
   { 3,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 3, 10,  0, 16,  0, SystemMode::Cool },      
+  { 3, 10,  0, 19,  0, SystemMode::Cool },      
   { 3, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Thursday
   { 4,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 4, 10,  0, 16,  0, SystemMode::Cool },      
+  { 4, 10,  0, 19,  0, SystemMode::Cool },      
   { 4, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Friday
   { 5,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 5, 10,  0, 16,  0, SystemMode::Cool },      
+  { 5, 10,  0, 19,  0, SystemMode::Cool },      
   { 5, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Saturday
   { 6,  0,  0,  6,  0, SystemMode::Regenerate },
-  { 6, 10,  0, 16,  0, SystemMode::Cool },      
+  { 6, 10,  0, 19,  0, SystemMode::Cool },      
   { 6, 22,  0, 23, 59, SystemMode::Regenerate } 
   // Add more days as needed
 };
@@ -442,6 +442,7 @@ String timeToString(struct tm timeInfo) {
 
 void PrintSensors(){
   Serial.println("--------------------------------------------");
+  Serial.println("Ver: " + CURRENT_FIRMWARE_VERSION);
   struct tm localTime;
   if(getLocalTime(&localTime)) Serial.println(timeToString(localTime));
   Serial.printf("System mode code %i: Mode = % s; PWM = %i; Water = %s; Dampers = %s\n", 
@@ -451,14 +452,14 @@ void PrintSensors(){
               currentWatereMode == WateringMode::On ? "Open" : "Close",
               currentAirMode == AirValveMode::Open ? "Open" : "Close");
 
-  Serial.print(shtSensorsManager.getShtName(shtSensorsManager.LEFT, 1) + ": Temp = " + (String)shtSensorsManager.getTempSht31(shtSensorsManager.LEFT, 1));
-  Serial.println("; RH = " + (String)shtSensorsManager.getRHSht31(shtSensorsManager.LEFT, 1));
-  Serial.print(shtSensorsManager.getShtName(shtSensorsManager.LEFT, 2) + ": Temp= " + (String)shtSensorsManager.getTempSht31(shtSensorsManager.LEFT, 2));
-  Serial.println("; RH = " + (String)shtSensorsManager.getRHSht31(shtSensorsManager.LEFT, 2));
-  Serial.print(shtSensorsManager.getShtName(shtSensorsManager.RIGHT, 1) + ": Temp = " + (String)shtSensorsManager.getTempSht31(shtSensorsManager.RIGHT, 1));
-  Serial.println("; RH = " + (String)shtSensorsManager.getRHSht31(shtSensorsManager.RIGHT, 1));
-  Serial.print(shtSensorsManager.getShtName(shtSensorsManager.RIGHT, 2) + ": Temp = " + (String)shtSensorsManager.getTempSht31(shtSensorsManager.RIGHT, 2));
-  Serial.println("; RH = " + (String)shtSensorsManager.getRHSht31(shtSensorsManager.RIGHT, 2));
+  Serial.print("Before: Temp = " + (String)shtSensorsManager.getBeforeTemp());
+  Serial.println("; RH = " + (String)shtSensorsManager.getBeforeRH());
+  Serial.print("After: Temp= " + (String)shtSensorsManager.getAfterTemp());
+  Serial.println("; RH = " + (String)shtSensorsManager.getAfterRH());
+  Serial.print("Ambiant: Temp = " + (String)shtSensorsManager.getAmbiantTemp());
+  Serial.println("; RH = " + (String)shtSensorsManager.getAmbiantRH());
+  Serial.print("Room: Temp = " + (String)shtSensorsManager.getRoomTemp());
+  Serial.println("; RH = " + (String)shtSensorsManager.getRoomRH());
   Serial.println("In Wall: Temp = " + (String)dallas.getTemperature("in_wall"));
   Serial.println("Roof Top: Temp = " + (String)dallas.getTemperature("roof_top"));
   Serial.println("--------------------------------------------");
