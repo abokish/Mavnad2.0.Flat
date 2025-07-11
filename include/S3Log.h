@@ -261,9 +261,9 @@ public:
             //Serial.printf("waiting for ssl client's response");
             getBody = waitForServerResponse(getAll, state, startTimer, timeoutTimer);
             ssll_client.stop();
-            if (getBody.length() > 0){ //something unusual happend.
-                Serial.printf("body: %s\n", getBody.c_str());
-            }
+            //if (getBody.length() > 0){ //something unusual happend.
+            //    Serial.printf("body: %s\n", getBody.c_str());
+            //}
             Serial.println("finished");
             sendOK=true;
 

@@ -74,8 +74,8 @@ public:
 
   void subscribeTopics() {
     Serial.println("[OTA] Subscribing to OTA topics...");
-    m_mqttClient.subscribe("v1/devices/me/attributes/response/+");
-    m_mqttClient.subscribe("v1/devices/me/attributes/updates");
+    m_mqttClient.subscribe("v1/devices/me/attributes/response/+"); // for pull
+    m_mqttClient.subscribe("v1/devices/me/attributes");            // for push
     m_mqttClient.publish("v1/devices/me/attributes/request/1", "{\"sharedKeys\":\"systemConfig,fw_version,fw_checksum,fw_size,fw_title\"}");
   }
 

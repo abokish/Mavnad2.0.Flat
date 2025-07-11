@@ -89,6 +89,38 @@ public:
         }
     };
 
+    float cleanReading(std::function<float()> readFunc, uint8_t samples = 5) {
+        std::vector<float> validReadings;
+
+        for (uint8_t i = 0; i < samples; ++i) {
+            float val = readFunc();
+            if (!isnan(val)) {
+            validReadings.push_back(val);
+            }
+            delay(10); // Optional: add small delay if needed for sensor stability
+        }
+
+        if (validReadings.size() == 0) {
+            return NAN; // Nothing valid
+        }
+
+        std::sort(validReadings.begin(), validReadings.end());
+
+        size_t n = validReadings.size();
+
+        if (n >= 5) {
+            return (validReadings[1] + validReadings[2] + validReadings[3]) / 3.0;
+        } else if (n == 4) {
+            return (validReadings[1] + validReadings[2]) / 2.0;
+        } else if (n == 3) {
+            return validReadings[1];
+        } else if (n == 2) {
+            return (validReadings[0] + validReadings[1]) / 2.0;
+        } else {
+            return validReadings[0];
+        }
+    }
+
     String getShtName(int side, int index) {
         String name = "";
 
@@ -147,34 +179,42 @@ public:
     };
 
     float getBeforeTemp() {
-        return sht31_Before->readTemperature();
+        float temp = cleanReading([&]() { return sht31_Before->readTemperature(); });
+        return temp;
     }
 
     float getAfterTemp() {
-        return sht31_After->readTemperature();
+        float temp = cleanReading([&]() { return sht31_After->readTemperature(); });
+        return temp;
     }
 
     float getAmbiantTemp() {
-        return sht31_Ambiant->readTemperature();
+        float temp = cleanReading([&]() { return sht31_Ambiant->readTemperature(); });
+        return temp;
     }
 
     float getRoomTemp() {
-        return sht31_Room->readTemperature();
+        float temp = cleanReading([&]() { return sht31_Room->readTemperature(); });
+        return temp;
     }
 
     float getBeforeRH() {
-        return sht31_Before->readHumidity();
+        float rh = cleanReading([&]() { return sht31_Before->readHumidity(); });
+        return rh;
     }
 
     float getAfterRH() {
-        return sht31_After->readHumidity();
+        float rh = cleanReading([&]() { return sht31_After->readHumidity(); });
+        return rh;
     }
 
     float getAmbiantRH() {
-        return sht31_Ambiant->readHumidity();
+        float rh = cleanReading([&]() { return sht31_Ambiant->readHumidity(); });
+        return rh;
     }
 
     float getRoomRH() {
-        return sht31_Room->readHumidity();
+        float rh = cleanReading([&]() { return sht31_Room->readHumidity(); });
+        return rh;
     }
 };

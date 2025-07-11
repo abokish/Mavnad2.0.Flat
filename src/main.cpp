@@ -10,6 +10,7 @@
 #include "DallasManager.h"
 #include "OTAManager.h"
 #include "esp_ota_ops.h"
+#include "TimeBudgetManager.h"
 
 // ===========================
 // Wifi credentials
@@ -26,9 +27,9 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.2";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.11";
 const String THINGSBOARD_SERVER = "thingsboard.cloud";
-const String TOKEN = "8sqfmy0fdvacex3ef0mo"; //"pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
+const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
 // Setup ThingsBoard client
 WiFiClient wiFiClient;
@@ -63,6 +64,8 @@ const int fanPins[] = {
   PIN_FAN_LEFT3, 
   PIN_FAN_LEFT4
 };
+
+float START_COOLING_DEG = 26;
 
 // OneWire setup
 DallasManager dallas(15);
@@ -165,6 +168,8 @@ WateringMode currentWatereMode = WateringMode::Off;
 int currentPWMSpeed = 0;
 const bool debugMode = false;
 
+TimeBudgetManager wateringBudget(10L * 60 * 1000, 1L * 60 * 1000);
+
 // Define a struct for relay configuration
 struct Relay {
   int pin;            // Pin number
@@ -253,6 +258,11 @@ void offPump() {
 void onSelenoid() {
   debugMessage("on selenoid");
   if(currentWatereMode == WateringMode::On) return;
+  if (!wateringBudget.isAllowed()) {
+    Serial.println("[Selenoid] Budget used up → cannot open");
+    return;
+  }
+
   Serial.println("[Selenoid] on");
   digitalWrite(PIN_SELENOID, HIGH);
   currentWatereMode = WateringMode::On;
@@ -323,6 +333,8 @@ void setSystemMode(AirValveMode airMode, int fanPercentage = 100, WateringMode w
 
 void onCool() {
   debugMessage("on cool");
+  if(shtSensorsManager.getRoomTemp() < START_COOLING_DEG) return;
+
   AirValveMode airMode = getAirModeByRoom();
   setSystemMode(airMode, 50, WateringMode::Off);
 
@@ -332,13 +344,15 @@ void onCool() {
 void onRegenerate() {
   debugMessage("on regenerate");
 
+  // Gets water mode
   WateringMode waterMode = currentWatereMode;
-  if(currentWatereMode == WateringMode::Off && shtSensorsManager.getBeforeRH() <= 85) waterMode = WateringMode::On;
-  if(currentWatereMode == WateringMode::On && shtSensorsManager.getBeforeRH() > 90) waterMode = WateringMode::Off;
+  if(currentWatereMode == WateringMode::Off && shtSensorsManager.getBeforeRH() <= 90) waterMode = WateringMode::On;
+  if(currentWatereMode == WateringMode::On && shtSensorsManager.getBeforeRH() > 95) waterMode = WateringMode::Off;
 
+  // Gets air mode
   AirValveMode airMode = getAirModeByRoom();
   
-  setSystemMode(airMode, 90, waterMode);
+  setSystemMode(airMode, 80, waterMode);
 
   currentSystemMode = SystemMode::Regenerate;
 }
@@ -398,7 +412,9 @@ void updateSystemMode() {
   }
 }
 
+unsigned long lastTickMillis = 0;
 void tick() {
+  wateringBudget.tick(currentWatereMode == WateringMode::On);
   updateSystemMode();
 }
 
@@ -442,7 +458,7 @@ String timeToString(struct tm timeInfo) {
 
 void PrintSensors(){
   Serial.println("--------------------------------------------");
-  Serial.println("Ver: " + CURRENT_FIRMWARE_VERSION);
+  Serial.println("Ver: " + CURRENT_FIRMWARE_VERSION + "; Device ID: " + TOKEN);
   struct tm localTime;
   if(getLocalTime(&localTime)) Serial.println(timeToString(localTime));
   Serial.printf("System mode code %i: Mode = % s; PWM = %i; Water = %s; Dampers = %s\n", 
@@ -451,6 +467,7 @@ void PrintSensors(){
               currentPWMSpeed,
               currentWatereMode == WateringMode::On ? "Open" : "Close",
               currentAirMode == AirValveMode::Open ? "Open" : "Close");
+  Serial.println("Watering total time today (minutes): " + String(wateringBudget.getDailyUsed() / 1000 / 60));
 
   Serial.print("Before: Temp = " + (String)shtSensorsManager.getBeforeTemp());
   Serial.println("; RH = " + (String)shtSensorsManager.getBeforeRH());
@@ -658,6 +675,7 @@ void setup() {
 // ==============================================================================
 // LOOP
 // ==============================================================================
+bool is2Minute = false;
 void loop() {
   tick();
 
@@ -666,11 +684,20 @@ void loop() {
   }
   mqttClient.loop();
 
-  // Every 10 minutes
+  // Every 2 minutes
+  if((timeClient->getMinute() % 2) == 0) {
+    if(!is2Minute) {
+      is2Minute = true;
+      PrintSensors();
+    }
+  } else {
+    is2Minute = false;
+  }
+
+    // Every 10 minutes
   if((timeClient->getMinute() % 10) == 0) {
     if(!isDataSent) {
       isDataSent = true;
-      PrintSensors();
       sendTelemetry();
     }
   }
