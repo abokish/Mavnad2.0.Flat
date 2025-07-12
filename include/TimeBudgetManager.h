@@ -98,13 +98,14 @@ public:
   }
 
   void printStatus(const String& label = "") const {
-    Serial.printf("[%sBudget] Slot remaining: %lu ms | Budget remaining: %lu ms | Daily used: %lu min\n",
+    Serial.printf("[%sBudget] Slot remaining: %.2f min | Budget remaining: %.2f min | Daily used: %.2f min\n",
         label.c_str(),
-        m_slotTimer,
-        m_budgetTimer,
-        m_dailyUsed / 60000UL  // ms → min
+        m_slotTimer / 60000.0,
+        m_budgetTimer / 60000.0,
+        m_dailyUsed / 60000.0
     );
   }
+
 
 private:
   // Configured slot and budget durations
