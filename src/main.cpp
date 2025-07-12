@@ -27,7 +27,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.11";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.14";
 const String THINGSBOARD_SERVER = "thingsboard.cloud";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
@@ -255,24 +255,27 @@ void offPump() {
   currentWatereMode = WateringMode::Off;
 }
 
-void onSelenoid() {
-  debugMessage("on selenoid");
-  if(currentWatereMode == WateringMode::On) return;
-  if (!wateringBudget.isAllowed()) {
-    Serial.println("[Selenoid] Budget used up → cannot open");
-    return;
-  }
-
-  Serial.println("[Selenoid] on");
-  digitalWrite(PIN_SELENOID, HIGH);
-  currentWatereMode = WateringMode::On;
-}
-
 void offSelenoid() {
   if(currentWatereMode == WateringMode::Off) return;
   Serial.println("[Selenoid] off");
   digitalWrite(PIN_SELENOID, LOW);
   currentWatereMode = WateringMode::Off;
+}
+
+void onSelenoid() {
+  debugMessage("on selenoid");
+  if (!wateringBudget.isAllowed()) {
+    // prints the message only once - the first time the water are on but not allowed. 
+    // later the current mode will be already off
+    if(currentWatereMode == WateringMode::On) Serial.println("[Selenoid] Budget used up → cannot open");
+    offSelenoid();
+    return;
+  }
+  if(currentWatereMode == WateringMode::On) return;
+
+  Serial.println("[Selenoid] on");
+  digitalWrite(PIN_SELENOID, HIGH);
+  currentWatereMode = WateringMode::On;
 }
 
 void off() {
@@ -336,7 +339,7 @@ void onCool() {
   if(shtSensorsManager.getRoomTemp() < START_COOLING_DEG) return;
 
   AirValveMode airMode = getAirModeByRoom();
-  setSystemMode(airMode, 50, WateringMode::Off);
+  setSystemMode(airMode, 50, WateringMode::On);
 
   currentSystemMode = SystemMode::Cool;
 }
@@ -467,7 +470,7 @@ void PrintSensors(){
               currentPWMSpeed,
               currentWatereMode == WateringMode::On ? "Open" : "Close",
               currentAirMode == AirValveMode::Open ? "Open" : "Close");
-  Serial.println("Watering total time today (minutes): " + String(wateringBudget.getDailyUsed() / 1000 / 60));
+  wateringBudget.printStatus("Watering");
 
   Serial.print("Before: Temp = " + (String)shtSensorsManager.getBeforeTemp());
   Serial.println("; RH = " + (String)shtSensorsManager.getBeforeRH());
