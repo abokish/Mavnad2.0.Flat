@@ -27,7 +27,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.16";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.18";
 const String THINGSBOARD_SERVER = "thingsboard.cloud";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
@@ -110,31 +110,31 @@ struct ScheduleEntry {
 std::vector<ScheduleEntry> modeSchedule = {
   // Sunday
   { 0,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 0, 10,  0, 19,  0, SystemMode::Cool },      
+  { 0,  6,  0, 19,  0, SystemMode::Cool },      
   { 0, 22,  0, 23, 59, SystemMode::Regenerate },
   // Monday 
   { 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 1, 10,  0, 19,  0, SystemMode::Cool },      
+  { 1,  6,  0, 19,  0, SystemMode::Cool },      
   { 1, 22,  0, 23, 59, SystemMode::Regenerate },
   // Tuesday 
   { 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 2, 10,  0, 19,  0, SystemMode::Cool },      
+  { 2,  6,  0, 19,  0, SystemMode::Cool },      
   { 2, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Wednesday
   { 3,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 3, 10,  0, 19,  0, SystemMode::Cool },      
+  { 3,  6,  0, 19,  0, SystemMode::Cool },      
   { 3, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Thursday
   { 4,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 4, 10,  0, 19,  0, SystemMode::Cool },      
+  { 4,  6,  0, 19,  0, SystemMode::Cool },      
   { 4, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Friday
   { 5,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 5, 10,  0, 19,  0, SystemMode::Cool },      
+  { 5,  6,  0, 19,  0, SystemMode::Cool },      
   { 5, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Saturday
   { 6,  0,  0,  6,  0, SystemMode::Regenerate },
-  { 6, 10,  0, 19,  0, SystemMode::Cool },      
+  { 6,  6,  0, 19,  0, SystemMode::Cool },      
   { 6, 22,  0, 23, 59, SystemMode::Regenerate } 
   // Add more days as needed
 };
@@ -336,10 +336,12 @@ void setSystemMode(AirValveMode airMode, int fanPercentage = 100, WateringMode w
 
 void onCool() {
   debugMessage("on cool");
-  if(shtSensorsManager.getRoomTemp() < START_COOLING_DEG) return;
+  float roomTemp = shtSensorsManager.getRoomTemp();
+  if(roomTemp < START_COOLING_DEG) return;
+  int pwmPercentage = map(roomTemp, 25, 29, 0, 80);
 
   AirValveMode airMode = getAirModeByRoom();
-  setSystemMode(airMode, 50, WateringMode::On);
+  setSystemMode(airMode, pwmPercentage, WateringMode::On);
 
   currentSystemMode = SystemMode::Cool;
 }
