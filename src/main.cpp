@@ -27,7 +27,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.14";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.16";
 const String THINGSBOARD_SERVER = "thingsboard.cloud";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
@@ -349,8 +349,10 @@ void onRegenerate() {
 
   // Gets water mode
   WateringMode waterMode = currentWatereMode;
-  if(currentWatereMode == WateringMode::Off && shtSensorsManager.getBeforeRH() <= 90) waterMode = WateringMode::On;
-  if(currentWatereMode == WateringMode::On && shtSensorsManager.getBeforeRH() > 95) waterMode = WateringMode::Off;
+  //if(currentWatereMode == WateringMode::Off && shtSensorsManager.getBeforeRH() <= 90) waterMode = WateringMode::On;
+  //if(currentWatereMode == WateringMode::On && shtSensorsManager.getBeforeRH() > 95) waterMode = WateringMode::Off;
+  if(shtSensorsManager.getBeforeRH() <= 95) waterMode = WateringMode::On;
+  else waterMode = WateringMode::Off;
 
   // Gets air mode
   AirValveMode airMode = getAirModeByRoom();
