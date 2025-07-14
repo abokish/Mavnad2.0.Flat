@@ -27,7 +27,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.18";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.20";
 const String THINGSBOARD_SERVER = "thingsboard.cloud";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
@@ -168,7 +168,7 @@ WateringMode currentWatereMode = WateringMode::Off;
 int currentPWMSpeed = 0;
 const bool debugMode = false;
 
-TimeBudgetManager wateringBudget(10L * 60 * 1000, 1L * 60 * 1000);
+TimeBudgetManager wateringBudget(5L * 60 * 1000, 0.5L * 60 * 1000);
 
 // Define a struct for relay configuration
 struct Relay {
@@ -189,6 +189,71 @@ float FloatValidityCheck(float value) {
   else return value;
 }
 
+/**
+ * @brief Write a log entry to S3 file for long-term local logging.
+ */
+void logToS3(const String& sensorName, const String& sensorType, const String& unit, float value) {
+  if (!dataLog) return;
+
+  dataLog->appendToLogFormatted(
+    timeClient->getFormattedTime(),
+    SITE_NAME,
+    BUILDING_NAME,
+    CONTROLLER_TYPE,
+    CONTROLLER_LOCATION,
+    sensorName,
+    sensorType,
+    unit,
+    value
+  );
+}
+
+void logToS3(const String& sensorName, const String& sensorType, const String& sensorLocation, const String& unit, float value) {
+  if (!dataLog) return;
+
+  dataLog->appendToLogFormatted(
+    timeClient->getFormattedTime(),
+    SITE_NAME,
+    BUILDING_NAME,
+    CONTROLLER_TYPE,
+    sensorLocation,
+    sensorName,
+    sensorType,
+    unit,
+    value
+  );
+}
+
+int getSystemStatusCode() {
+  // System state value has 3 digits:
+  // First one is the system mode: 1 = cooling; 2 = heating; 3 = regenerating; 0 = off
+  // Second digit is fans speed: 1 = low; 2 = medium; 3 = high speed; 0 = fans are closed
+  // Third digit is the water status: 1 = open; 0 = close
+  // Fourth digit is the dampers status: 1 = open; 0 = close
+  // The sing (negative or possitive number) is: > = outtake; < 0 = intake (reverse)
+  int status = 0; // first digit - operating mode
+  if(currentSystemMode == SystemMode::Cool) status = 1;
+  else if(currentSystemMode == SystemMode::Heat) status = 2;
+  else if(currentSystemMode == SystemMode::Regenerate) status = 3;
+
+  status *= 10; // second digit - speed (convert precenteg to a number between 0 to 3)
+  status += map(currentPWMSpeed, 0, 100, 0, 3);
+
+  status *= 10; // third digit - water status
+  if(currentWatereMode == WateringMode::On) status += 1;
+
+  status *= 10; // forth digit - dampers status
+  if(currentAirMode == AirValveMode::Open) status += 1;
+
+  // in this system there is no way to turn fans outtake (reverse), so no need to check - value always possitive
+
+  return status;
+}
+
+void logModeToS3(float value) {
+    logToS3("System", "system", "cooler", "mode", value); // "mode" must be in location "cooler"
+}
+
 void onFans(int percentage = 100) {
   if(currentPWMSpeed == percentage) return;
 
@@ -196,6 +261,7 @@ void onFans(int percentage = 100) {
   int duty = map(percentage, 0, 100, 0, 255);
   ledcWrite(FAN_CHANNEL, duty);
   currentPWMSpeed = percentage;
+  logModeToS3(getSystemStatusCode());
 }
 
 void offFans() {
@@ -204,6 +270,7 @@ void offFans() {
   Serial.println("[Fans] off");
   ledcWrite(FAN_CHANNEL, 0);
   currentPWMSpeed = 0;
+  logModeToS3(getSystemStatusCode());
 }
 
 void onDampers() {
@@ -221,6 +288,7 @@ void onDampers() {
   digitalWrite(PIN_DAMPER, LOW);
 
   currentAirMode = AirValveMode::Open;
+  logModeToS3(getSystemStatusCode());
 }
 
 void offDampers() {
@@ -233,6 +301,7 @@ void offDampers() {
   digitalWrite(PIN_DAMPER_POWER, LOW);
 
   currentAirMode = AirValveMode::Close;
+  logModeToS3(getSystemStatusCode());
 }
 
 void onPump() {
@@ -243,6 +312,7 @@ void onPump() {
   digitalWrite(PIN_PUMP, HIGH);
   
   currentWatereMode = WateringMode::On;
+  logModeToS3(getSystemStatusCode());
 }
 
 void offPump() {
@@ -253,6 +323,7 @@ void offPump() {
   digitalWrite(PIN_PUMP, LOW);
   
   currentWatereMode = WateringMode::Off;
+  logModeToS3(getSystemStatusCode());
 }
 
 void offSelenoid() {
@@ -260,6 +331,7 @@ void offSelenoid() {
   Serial.println("[Selenoid] off");
   digitalWrite(PIN_SELENOID, LOW);
   currentWatereMode = WateringMode::Off;
+  logModeToS3(getSystemStatusCode());
 }
 
 void onSelenoid() {
@@ -276,6 +348,7 @@ void onSelenoid() {
   Serial.println("[Selenoid] on");
   digitalWrite(PIN_SELENOID, HIGH);
   currentWatereMode = WateringMode::On;
+  logModeToS3(getSystemStatusCode());
 }
 
 void off() {
@@ -338,9 +411,10 @@ void onCool() {
   debugMessage("on cool");
   float roomTemp = shtSensorsManager.getRoomTemp();
   if(roomTemp < START_COOLING_DEG) return;
-  int pwmPercentage = map(roomTemp, 25, 29, 0, 80);
 
   AirValveMode airMode = getAirModeByRoom();
+  int pwmPercentage = map(roomTemp, 25, 29, 0, 80);
+  
   setSystemMode(airMode, pwmPercentage, WateringMode::On);
 
   currentSystemMode = SystemMode::Cool;
@@ -370,6 +444,7 @@ void onHeat() {
 }
 
 // ========== update mode =============
+SystemMode lastSelectedMode = SystemMode::Stop;
 void updateSystemMode() {
   // gets current time
   struct tm timeinfo;
@@ -396,7 +471,9 @@ void updateSystemMode() {
     }
   }
 
-  if (newMode != currentSystemMode) {
+  if (newMode != currentSystemMode && lastSelectedMode != newMode) {
+    // lastSelectedMode is just to make sure i print this only once
+    lastSelectedMode = newMode;
     Serial.printf("[System] Mode changed to %s\n", SystemModeHelper::toString(newMode).c_str());
   }
     
@@ -425,32 +502,6 @@ void tick() {
   updateSystemMode();
 }
 
-int getSystemStatusCode() {
-  // System state value has 3 digits:
-  // First one is the system mode: 1 = cooling; 2 = heating; 3 = regenerating; 0 = off
-  // Second digit is fans speed: 1 = low; 2 = medium; 3 = high speed; 0 = fans are closed
-  // Third digit is the water status: 1 = open; 0 = close
-  // Fourth digit is the dampers status: 1 = open; 0 = close
-  // The sing (negative or possitive number) is: > = outtake; < 0 = intake (reverse)
-  int status = 0; // first digit - operating mode
-  if(currentSystemMode == SystemMode::Cool) status = 1;
-  else if(currentSystemMode == SystemMode::Heat) status = 2;
-  else if(currentSystemMode == SystemMode::Regenerate) status = 3;
-
-  status *= 10; // second digit - speed (convert precenteg to a number between 0 to 3)
-  status += map(currentPWMSpeed, 0, 100, 0, 3);
-
-  status *= 10; // third digit - water status
-  if(currentWatereMode == WateringMode::On) status += 1;
-
-  status *= 10; // forth digit - dampers status
-  if(currentAirMode == AirValveMode::Open) status += 1;
-
-  // in this system there is no way to turn fans outtake (reverse), so no need to check - value always possitive
-
-  return status;
-}
-
 String timeToString(struct tm timeInfo) {
   char buffer[32];
   sprintf(buffer, "%02d.%02d.%d %02d:%02d:%02d", 
@@ -476,12 +527,12 @@ void PrintSensors(){
               currentAirMode == AirValveMode::Open ? "Open" : "Close");
   wateringBudget.printStatus("Watering");
 
+  Serial.print("Ambiant: Temp = " + (String)shtSensorsManager.getAmbiantTemp());
+  Serial.println("; RH = " + (String)shtSensorsManager.getAmbiantRH());
   Serial.print("Before: Temp = " + (String)shtSensorsManager.getBeforeTemp());
   Serial.println("; RH = " + (String)shtSensorsManager.getBeforeRH());
   Serial.print("After: Temp= " + (String)shtSensorsManager.getAfterTemp());
   Serial.println("; RH = " + (String)shtSensorsManager.getAfterRH());
-  Serial.print("Ambiant: Temp = " + (String)shtSensorsManager.getAmbiantTemp());
-  Serial.println("; RH = " + (String)shtSensorsManager.getAmbiantRH());
   Serial.print("Room: Temp = " + (String)shtSensorsManager.getRoomTemp());
   Serial.println("; RH = " + (String)shtSensorsManager.getRoomRH());
   Serial.println("In Wall: Temp = " + (String)dallas.getTemperature("in_wall"));
@@ -524,41 +575,6 @@ struct tm SetupTime(){
     }
     Serial.println("Time successfully set!");
     return timeinfo;
-}
-
-/**
- * @brief Write a log entry to S3 file for long-term local logging.
- */
-void logToS3(const String& sensorName, const String& sensorType, const String& unit, float value) {
-  if (!dataLog) return;
-
-  dataLog->appendToLogFormatted(
-    timeClient->getFormattedTime(),
-    SITE_NAME,
-    BUILDING_NAME,
-    CONTROLLER_TYPE,
-    CONTROLLER_LOCATION,
-    sensorName,
-    sensorType,
-    unit,
-    value
-  );
-}
-
-void logToS3(const String& sensorName, const String& sensorType, const String& sensorLocation, const String& unit, float value) {
-  if (!dataLog) return;
-
-  dataLog->appendToLogFormatted(
-    timeClient->getFormattedTime(),
-    SITE_NAME,
-    BUILDING_NAME,
-    CONTROLLER_TYPE,
-    sensorLocation,
-    sensorName,
-    sensorType,
-    unit,
-    value
-  );
 }
 
 void PrintPartitions() {
