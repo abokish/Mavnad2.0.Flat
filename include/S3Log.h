@@ -94,20 +94,19 @@ public:
     const String& sensorName,
     const String& sensorType,
     const String& unit,
-    float value
-) {
-    String message = timestamp + "," + 
-                     site + "," + 
-                     building + "," + 
-                     controllerType + "," + 
-                     controllerLocation + "," +
-                     sensorName + "," + 
-                     sensorType + "," + 
-                     unit + "," + 
-                     String(value) + "\n";
-                     
-    appendToLog(message.c_str());
-}
+    float value) {
+        String message = timestamp + "," + 
+                        site + "," + 
+                        building + "," + 
+                        controllerType + "," + 
+                        controllerLocation + "," +
+                        sensorName + "," + 
+                        sensorType + "," + 
+                        unit + "," + 
+                        String(value) + "\n";
+                        
+        appendToLog(message.c_str());
+    }
 
 
     size_t getLogFileSize(){

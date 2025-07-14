@@ -13,8 +13,12 @@
 
 class OTAManager {
 public:
+  const String THINGSBOARD_SERVER = "thingsboard.cloud";
+
   OTAManager(PubSubClient &mqttClient, const String& fwVersion, const String& deviceToken)
-    : m_mqttClient(mqttClient), m_fwVersion(fwVersion), m_token(deviceToken) {}
+    : m_mqttClient(mqttClient), m_fwVersion(fwVersion), m_token(deviceToken) {
+      m_mqttClient.setServer(THINGSBOARD_SERVER.c_str(), 1883);
+    }
 
   void begin() {
     Serial.println("[OTA] Initializing LittleFS...");
@@ -26,6 +30,14 @@ public:
       this->handleMqttMessage(topic, payload, length);
     });
     subscribeTopics();
+    checkAndConfirmOTA();
+  }
+
+  void tick() {
+    if (!m_mqttClient.connected()) {
+      connectMQTT();
+    }
+    m_mqttClient.loop();
   }
 
   void connectMQTT() {

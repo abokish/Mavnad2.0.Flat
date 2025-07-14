@@ -27,8 +27,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.20";
-const String THINGSBOARD_SERVER = "thingsboard.cloud";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.22";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
 // Setup ThingsBoard client
@@ -114,7 +113,7 @@ std::vector<ScheduleEntry> modeSchedule = {
   { 0, 22,  0, 23, 59, SystemMode::Regenerate },
   // Monday 
   { 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 1,  6,  0, 19,  0, SystemMode::Cool },      
+  { 1,  6,  0, 19,  0, SystemMode::Regenerate },      
   { 1, 22,  0, 23, 59, SystemMode::Regenerate },
   // Tuesday 
   { 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
@@ -168,7 +167,7 @@ WateringMode currentWatereMode = WateringMode::Off;
 int currentPWMSpeed = 0;
 const bool debugMode = false;
 
-TimeBudgetManager wateringBudget(5L * 60 * 1000, 0.5L * 60 * 1000);
+TimeBudgetManager wateringBudget(5L * 60 * 1000, 0.25L * 60 * 1000);
 
 // Define a struct for relay configuration
 struct Relay {
@@ -541,7 +540,7 @@ void PrintSensors(){
 }
 
 void setupWiFi(unsigned long timeoutMs) {
-    Serial.printf("[WiFi] Connecting to %s\n", WIFI_SSID);
+    Serial.printf("[WiFi] Connecting to %s", WIFI_SSID);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     unsigned long startAttemptTime = millis();
@@ -562,18 +561,27 @@ void setupWiFi(unsigned long timeoutMs) {
 
 // The method init NTP server and wait until the builtin 
 // RTC will get the current time from the net
-struct tm SetupTime(){
-    // Initialize NTP
+struct tm SetupTime() {
     configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.nist.gov");
     Serial.println("NTP configured");
 
-    // Wait until the time is set
     struct tm timeinfo;
-    while (!getLocalTime(&timeinfo)) {
-        Serial.println("Failed to obtain time");
+    const int maxRetries = 10;  // Try for 10 seconds max
+    int retries = 0;
+
+    while (!getLocalTime(&timeinfo) && retries < maxRetries) {
+        Serial.println("Failed to obtain time, retrying...");
+        retries++;
         delay(1000);
     }
-    Serial.println("Time successfully set!");
+
+    if (retries >= maxRetries) {
+        Serial.println("ERROR: Unable to set time from NTP. Using default time or RTC fallback.");
+        // Optional: you could set default values in timeinfo or handle it gracefully.
+    } else {
+        Serial.println("Time successfully set!");
+    }
+
     return timeinfo;
 }
 
@@ -671,24 +679,13 @@ void setup() {
   struct tm timeInfo = SetupTime();
   timeClient = new TimeClient();
   if (!getLocalTime(&timeInfo)) Serial.println("[Time] Failed to get local time");
-  else Serial.printf("[Time] %02d.%02d.%d %02d:%02d:%02d\n", 
-        timeInfo.tm_mday, 
-        timeInfo.tm_mon + 1, 
-        timeInfo.tm_year + 1900, 
-        timeInfo.tm_hour, 
-        timeInfo.tm_min,
-        timeInfo.tm_sec);
+  else timeToString(timeInfo); // print time
 
   Serial.print("[Setup] Initializing S3Log ");
   dataLog = new S3Log("/log.txt", timeClient);
 
   Serial.println("[Setup] Initializing ThingsBoard");
-  mqttClient.setServer(THINGSBOARD_SERVER.c_str(), 1883);
   otaManager.begin();
-  if (!mqttClient.connected()) {
-    otaManager.connectMQTT();
-  }
-  otaManager.checkAndConfirmOTA();
 
   Serial.println("[setup] setup done successfuly!");
 
@@ -700,12 +697,8 @@ void setup() {
 // ==============================================================================
 bool is2Minute = false;
 void loop() {
+  otaManager.tick();
   tick();
-
-  if (!mqttClient.connected()) {
-    otaManager.connectMQTT();
-  }
-  mqttClient.loop();
 
   // Every 2 minutes
   if((timeClient->getMinute() % 2) == 0) {
