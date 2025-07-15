@@ -14,6 +14,18 @@
 class OTAManager {
 public:
   const String THINGSBOARD_SERVER = "thingsboard.cloud";
+  std::function<int()> getFanSpeedFunc;
+  std::function<void(int)> setFanSpeedFunc;
+  std::function<bool()> getDampersStatusFunc;
+  std::function<void(bool)> setDampersStatusFunc;
+  std::function<bool()> getSolenoidStatusFunc;
+  std::function<void(bool)> setSolenoidStatusFunc;
+  std::function<int()> getWaterSlotFunc;
+  std::function<void(int)> setWaterSlotFunc;
+  std::function<int()> getWaterBudgetFunc;
+  std::function<void(int)> setWaterBudgetFunc;
+  std::function<bool()> getSystemAutoModeFunc;
+  std::function<void(bool)> setSystemAutoModeFunc;
 
   OTAManager(PubSubClient &mqttClient, const String& fwVersion, const String& deviceToken)
     : m_mqttClient(mqttClient), m_fwVersion(fwVersion), m_token(deviceToken) {
@@ -88,7 +100,75 @@ public:
     Serial.println("[OTA] Subscribing to OTA topics...");
     m_mqttClient.subscribe("v1/devices/me/attributes/response/+"); // for pull
     m_mqttClient.subscribe("v1/devices/me/attributes");            // for push
+    m_mqttClient.subscribe("v1/devices/me/rpc/request/+");         // for RPC
+
     m_mqttClient.publish("v1/devices/me/attributes/request/1", "{\"sharedKeys\":\"systemConfig,fw_version,fw_checksum,fw_size,fw_title\"}");
+  }
+
+  void handleRPC(const String& topic, JsonDocument& doc) {
+    // Extract request ID from topic: "v1/devices/me/rpc/request/<id>"
+    String requestId = topic.substring(topic.lastIndexOf("/") + 1);
+
+    String method = doc["method"] | "";
+    Serial.printf("[RPC] Method: %s\n", method.c_str());
+
+    if (method == "getFanSpeed") {  // =============== getFanSpeed
+      int fanSpeed = getFanSpeedFunc();
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), String(fanSpeed).c_str());
+      Serial.printf("[RPC] Sent fan speed: %d\n", fanSpeed);
+    } else if (method == "setFanSpeed") { // ========== setFansSpeed
+      int newSpeed = doc["params"] | 0;
+      setFanSpeedFunc(newSpeed);
+      Serial.printf("[RPC] Set fan speed to: %d\n", newSpeed);
+    } else if (method == "getDampersStatus") {  // ====== getDampersStatus
+      bool state = getDampersStatusFunc();
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), String(state).c_str());
+      Serial.printf("[RPC] Sent dampers status: %d\n", state);
+    } else if (method == "setDampersStatus") {  // ======= setDampersStatus
+      bool state = doc["params"] | false;
+      setDampersStatusFunc(state);
+      Serial.printf("[RPC] Set dampers status to: %d\n", state);
+    } else if (method == "getSolenoidStatus") {  // ====== getSolenoidStatus
+      bool state = getSolenoidStatusFunc();
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), String(state).c_str());
+      Serial.printf("[RPC] Sent solenoid status: %d\n", state);
+    } else if (method == "setSolenoidStatus") {  // ======= setSolenoidStatus
+      bool state = doc["params"] | false;
+      setSolenoidStatusFunc(state);
+      Serial.printf("[RPC] Set solenoid status to: %d\n", state);
+    } else if (method == "getWaterSlot") {  // ====== getSlot
+      int slot = getWaterSlotFunc();
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), String(slot).c_str());
+      Serial.printf("[RPC] Sent solenoid status: %d\n", slot);
+    } else if (method == "setWaterSlot") {  // ======= setSlot
+      int slot = doc["params"] | 0;
+      setWaterSlotFunc(slot);
+      Serial.printf("[RPC] Set water slot to: %d\n", slot);
+    } else if (method == "getWaterBudget") {  // ====== getBudget
+      int budget = getWaterBudgetFunc();
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), String(budget).c_str());
+      Serial.printf("[RPC] Sent water budget status: %d\n", budget);
+    } else if (method == "setWaterBudget") {  // ======= setBudget
+      int budget = doc["params"] | 0;
+      setWaterBudgetFunc(budget);
+      Serial.printf("[RPC] Set water baudget to: %d\n", budget);
+    } else if (method == "getSystemAutoMode") {  // ====== getSystemAutoMode
+      bool mode = getSystemAutoModeFunc();
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), String(mode).c_str());
+      Serial.printf("[RPC] Sent system auto mode status: %d\n", mode);
+    } else if (method == "setSystemAutoMode") {  // ======= setSystemAutoMode
+      bool mode = doc["params"] | false;
+      setSystemAutoModeFunc(mode);
+      Serial.printf("[RPC] Set system auto mode to: %d\n", mode);
+    } else {
+      Serial.println("[RPC] Unknown method.");
+    }
   }
 
   void handleMqttMessage(const char* topic, byte* payload, unsigned int length) {
@@ -99,10 +179,14 @@ public:
       return;
     }
 
-    // Serial.println("[MQTT] Incoming message:");
-    // serializeJsonPretty(doc, Serial);
-    // Serial.println();
+    // Check if this is an RPC topic
+    String topicStr(topic);
+    if (topicStr.startsWith("v1/devices/me/rpc/request/")) {
+      handleRPC(topicStr, doc);
+      return; // Done
+    }
 
+    // === OTA handling ===
     JsonObject shared;
     if (doc["shared"].is<JsonObject>()) {
       shared = doc["shared"].as<JsonObject>(); // Push

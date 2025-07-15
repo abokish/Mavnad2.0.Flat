@@ -89,27 +89,39 @@ public:
         }
     };
 
-    float cleanReading(std::function<float()> readFunc, uint8_t samples = 5) {
+    float cleanReading(std::function<float()> readFunc, uint8_t samples = 15, uint16_t delayMs = 10) {
         std::vector<float> validReadings;
 
         for (uint8_t i = 0; i < samples; ++i) {
             float val = readFunc();
             if (!isnan(val)) {
-            validReadings.push_back(val);
+                validReadings.push_back(val);
             }
-            delay(10); // Optional: add small delay if needed for sensor stability
+            delay(delayMs);
         }
 
-        if (validReadings.size() == 0) {
-            return NAN; // Nothing valid
+        if (validReadings.empty()) {
+            return NAN;
         }
 
         std::sort(validReadings.begin(), validReadings.end());
-
         size_t n = validReadings.size();
 
         if (n >= 5) {
-            return (validReadings[1] + validReadings[2] + validReadings[3]) / 3.0;
+            size_t trim = n / 5; // 20% trimmed mean
+            size_t start = trim;
+            size_t end = n - trim;
+
+            if (end <= start) {
+                return validReadings[n / 2]; // fallback to median
+            }
+
+            float sum = 0;
+            for (size_t i = start; i < end; ++i) {
+                sum += validReadings[i];
+            }
+            return sum / (end - start);
+
         } else if (n == 4) {
             return (validReadings[1] + validReadings[2]) / 2.0;
         } else if (n == 3) {
@@ -120,6 +132,7 @@ public:
             return validReadings[0];
         }
     }
+
 
     String getShtName(int side, int index) {
         String name = "";

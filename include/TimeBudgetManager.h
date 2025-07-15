@@ -19,8 +19,8 @@ public:
    * @param budgetDurationMs Maximum ON time allowed per slot in milliseconds.
    */
   TimeBudgetManager(unsigned long slotDurationMs, unsigned long budgetDurationMs)
-    : SLOT_DURATION(slotDurationMs),
-      BUDGET_DURATION(budgetDurationMs),
+    : m_slotDuration(slotDurationMs),
+      m_budgetDuration(budgetDurationMs),
       m_slotTimer(slotDurationMs),
       m_budgetTimer(budgetDurationMs)
   {
@@ -53,8 +53,8 @@ public:
 
     // If slot has expired, reset slot and budget for new cycle
     if (m_slotTimer == 0) {
-      m_slotTimer = SLOT_DURATION;
-      m_budgetTimer = BUDGET_DURATION;
+      m_slotTimer = m_slotDuration;
+      m_budgetTimer = m_budgetDuration;
     }
   }
 
@@ -97,6 +97,23 @@ public:
     m_dailyUsed = 0;
   }
 
+  unsigned long getSlotDurationMs() const {
+    return m_slotDuration;
+  }
+
+  unsigned long getBudgetDurationMs() const {
+    return m_budgetDuration;
+  }
+
+  void setSlotDurationMs(unsigned long slotDuration) {
+    m_slotDuration = slotDuration;
+  }
+
+  void setBudgetDurationMs(unsigned long budgetDuration) {
+    m_budgetDuration = budgetDuration;
+  }
+
+
   void printStatus(const String& label = "") const {
     Serial.printf("[%sBudget] Slot remaining: %.2f min | Budget remaining: %.2f min | Daily used: %.2f min\n",
         label.c_str(),
@@ -109,8 +126,8 @@ public:
 
 private:
   // Configured slot and budget durations
-  const unsigned long SLOT_DURATION;
-  const unsigned long BUDGET_DURATION;
+  unsigned long m_slotDuration;
+  unsigned long m_budgetDuration;
 
   // Remaining time in current slot and ON-time budget
   long m_slotTimer;

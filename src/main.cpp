@@ -4,6 +4,7 @@
 #include <LittleFS.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <algorithm>
 #include "SHTManager.h"
 #include "TimeClient.h"
 #include "S3Log.h"
@@ -27,7 +28,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.22";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.40";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
 // Setup ThingsBoard client
@@ -89,7 +90,8 @@ enum SystemMode {
   Regenerate,
   Heat,
   Cool,
-  Stop
+  Stop,
+  Manual
 };
 
 enum WateringMode {
@@ -113,7 +115,7 @@ std::vector<ScheduleEntry> modeSchedule = {
   { 0, 22,  0, 23, 59, SystemMode::Regenerate },
   // Monday 
   { 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 1,  6,  0, 19,  0, SystemMode::Regenerate },      
+  { 1,  6,  0, 19,  0, SystemMode::Cool },      
   { 1, 22,  0, 23, 59, SystemMode::Regenerate },
   // Tuesday 
   { 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
@@ -145,6 +147,7 @@ struct SystemModeHelper {
       case SystemMode::Heat:      return "Heat";
       case SystemMode::Regenerate: return "Regenerate";
       case SystemMode::Stop:      return "Stop";
+      case SystemMode::Manual:      return "Manual";
       default:                       return "Unknown";
     }
   }
@@ -164,7 +167,8 @@ struct SystemModeHelper {
 SystemMode currentSystemMode = SystemMode::Stop;
 AirValveMode currentAirMode = AirValveMode::Close;
 WateringMode currentWatereMode = WateringMode::Off;
-int currentPWMSpeed = 0;
+WateringMode manualWaterMode = WateringMode::Off;
+int currentPWMSpeed = 0; // in percentage (0 - 100)
 const bool debugMode = false;
 
 TimeBudgetManager wateringBudget(5L * 60 * 1000, 0.25L * 60 * 1000);
@@ -234,6 +238,7 @@ int getSystemStatusCode() {
   if(currentSystemMode == SystemMode::Cool) status = 1;
   else if(currentSystemMode == SystemMode::Heat) status = 2;
   else if(currentSystemMode == SystemMode::Regenerate) status = 3;
+  else if(currentSystemMode == SystemMode::Manual) status = 4;
 
   status *= 10; // second digit - speed (convert precenteg to a number between 0 to 3)
   status += map(currentPWMSpeed, 0, 100, 0, 3);
@@ -253,7 +258,7 @@ void logModeToS3(float value) {
     logToS3("System", "system", "cooler", "mode", value); // "mode" must be in location "cooler"
 }
 
-void onFans(int percentage = 100) {
+void onFans(int percentage = 70) {
   if(currentPWMSpeed == percentage) return;
 
   Serial.printf("[Fans] current pwm = %i; new = %i\n", currentPWMSpeed, percentage);
@@ -295,7 +300,7 @@ void offDampers() {
   if(currentAirMode == AirValveMode::Close) return;
   Serial.println("[Dampers] off");
 
-  digitalWrite(PIN_DAMPER, LOW);
+  digitalWrite(PIN_DAMPER_POWER, HIGH);
   delay(1000 * 12); // 12 seconds until dampers get closed
   digitalWrite(PIN_DAMPER_POWER, LOW);
 
@@ -394,27 +399,42 @@ void setWater(WateringMode mode) {
 AirValveMode getAirModeByRoom() {
   debugMessage("get air mode by room");
   AirValveMode airMode = currentAirMode;
-  if(currentAirMode == AirValveMode::Open && shtSensorsManager.getRoomRH() > 75) airMode = AirValveMode::Close;
-  if(currentAirMode == AirValveMode::Close && shtSensorsManager.getRoomRH() <= 60) airMode = AirValveMode::Open;
+  float roomRH = shtSensorsManager.getRoomRH();
+  if(isnan(roomRH)) return airMode;
+
+  if(currentAirMode == AirValveMode::Open && roomRH > 75) airMode = AirValveMode::Close;
+  if(currentAirMode == AirValveMode::Close && roomRH <= 60) airMode = AirValveMode::Open;
   return airMode;
 }
 
-void setSystemMode(AirValveMode airMode, int fanPercentage = 100, WateringMode wateringMode = WateringMode::Off) {
+void setSystemMode(AirValveMode airMode, int fanPercentage = 70, WateringMode wateringMode = WateringMode::Off) {
   debugMessage("set system mode");
   setWater(wateringMode);
   onFans(fanPercentage);
   setDampers(airMode);
 }
 
+float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+
 void onCool() {
   debugMessage("on cool");
   float roomTemp = shtSensorsManager.getRoomTemp();
-  if(roomTemp < START_COOLING_DEG) return;
+  if(isnan(roomTemp) || roomTemp < START_COOLING_DEG) return;
 
   AirValveMode airMode = getAirModeByRoom();
-  int pwmPercentage = map(roomTemp, 25, 29, 0, 80);
+  float pwmPercentage = mapFloat(roomTemp, 25.0, 29.0, 70.0, 20.0);
+  pwmPercentage = max(20.0f, min(70.0f, pwmPercentage)); // clamp the value
+
+  WateringMode wateringMode = currentWatereMode;
+  float beforeRH = shtSensorsManager.getBeforeRH();
+  if(!isnan(beforeRH))
+    if(beforeRH <= 80) wateringMode = WateringMode::On; 
+    else wateringMode = WateringMode::Off;
   
-  setSystemMode(airMode, pwmPercentage, WateringMode::On);
+  setSystemMode(airMode, (int)pwmPercentage, wateringMode);
 
   currentSystemMode = SystemMode::Cool;
 }
@@ -424,10 +444,12 @@ void onRegenerate() {
 
   // Gets water mode
   WateringMode waterMode = currentWatereMode;
+  float beforeRh = shtSensorsManager.getBeforeRH();
   //if(currentWatereMode == WateringMode::Off && shtSensorsManager.getBeforeRH() <= 90) waterMode = WateringMode::On;
   //if(currentWatereMode == WateringMode::On && shtSensorsManager.getBeforeRH() > 95) waterMode = WateringMode::Off;
-  if(shtSensorsManager.getBeforeRH() <= 95) waterMode = WateringMode::On;
-  else waterMode = WateringMode::Off;
+  if(!isnan(beforeRh))
+    if(beforeRh <= 95) waterMode = WateringMode::On;
+    else waterMode = WateringMode::Off;
 
   // Gets air mode
   AirValveMode airMode = getAirModeByRoom();
@@ -445,6 +467,11 @@ void onHeat() {
 // ========== update mode =============
 SystemMode lastSelectedMode = SystemMode::Stop;
 void updateSystemMode() {
+  if(currentSystemMode == SystemMode::Manual) {
+    if(manualWaterMode == WateringMode::On) onSelenoid();
+    return;
+  }
+
   // gets current time
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
@@ -498,7 +525,11 @@ void updateSystemMode() {
 unsigned long lastTickMillis = 0;
 void tick() {
   wateringBudget.tick(currentWatereMode == WateringMode::On);
-  updateSystemMode();
+
+  // every 5 minutes update the system mode (if needed)
+  if((timeClient->getMinute() % 5) == 0) { 
+    updateSystemMode();
+  }
 }
 
 String timeToString(struct tm timeInfo) {
@@ -626,6 +657,62 @@ void sendTelemetry() {
   dataLog->uploadDataFile(SITE_NAME, BUILDING_NAME, "Mavnad1");
 }
 
+int getFanSpeed() {
+  return currentPWMSpeed;
+}
+
+void setFanSpeed(int pwm) {
+  currentSystemMode = SystemMode::Manual;
+  onFans(pwm);
+}
+
+bool getDampersStatus() {
+  return currentAirMode == AirValveMode::Open;
+}
+
+void setDampersStatus(bool isOpen) {
+  currentSystemMode = SystemMode::Manual;
+  setDampers(isOpen ? AirValveMode::Open : AirValveMode::Close);
+}
+
+bool getSolenoidStatus() {
+  return currentWatereMode == WateringMode::On;
+}
+
+void setSolenoidStatus(bool status) {
+  currentSystemMode = SystemMode::Manual;
+  setWater(status ? WateringMode::On : WateringMode::Off);
+}
+
+int getWaterSlot() { // minutes
+  return wateringBudget.getSlotDurationMs() / 1000 / 60;
+}
+
+void setWaterSlot(int duration) {
+  currentSystemMode = SystemMode::Manual;
+  wateringBudget.setSlotDurationMs(duration * 60 * 1000);
+  manualWaterMode = WateringMode::On;
+}
+
+int getWaterBudget() { // seconds
+  return wateringBudget.getBudgetDurationMs() / 1000;
+}
+
+void setWaterBudget(int duration) {
+  currentSystemMode = SystemMode::Manual;
+  wateringBudget.setBudgetDurationMs(duration * 1000);
+  manualWaterMode = WateringMode::On;
+}
+
+bool getSystemAutoMode() {
+  // any mode that is not Manual is auto
+  return currentSystemMode != SystemMode::Manual;
+}
+
+bool setSystemAutoMode(bool autoMode) {
+  currentSystemMode = autoMode ? SystemMode::Stop : SystemMode::Manual;
+}
+
 
 void HandleManualControl();
 
@@ -686,6 +773,18 @@ void setup() {
 
   Serial.println("[Setup] Initializing ThingsBoard");
   otaManager.begin();
+  otaManager.getFanSpeedFunc = getFanSpeed;
+  otaManager.setFanSpeedFunc = onFans;
+  otaManager.getDampersStatusFunc = getDampersStatus;
+  otaManager.setDampersStatusFunc = setDampersStatus;
+  otaManager.getSolenoidStatusFunc = getSolenoidStatus;
+  otaManager.setSolenoidStatusFunc = setSolenoidStatus;
+  otaManager.getWaterSlotFunc = getWaterSlot;
+  otaManager.setWaterSlotFunc = setWaterSlot;
+  otaManager.getWaterBudgetFunc = getWaterBudget;
+  otaManager.setWaterBudgetFunc = setWaterBudget;
+  otaManager.getSystemAutoModeFunc = getSystemAutoMode;
+  otaManager.setSystemAutoModeFunc = setSystemAutoMode;
 
   Serial.println("[setup] setup done successfuly!");
 
@@ -810,6 +909,23 @@ void HandleManualControl(){
     else if(input.equalsIgnoreCase("restart")) { // RESTART =============================
       Serial.println("Rebooting...");
       ESP.restart();
+    }
+    else if(input.equalsIgnoreCase("manual")) { // Manual =============================
+      Serial.println("Manual Mode");
+      currentSystemMode = SystemMode::Manual;
+    }
+    else if(input.equalsIgnoreCase("mWater")) { // Manual Watring =============================
+      Serial.println("Enter manual watering state (1 = Open, 0 = Close): ");
+        while (!Serial.available()) {
+            delay(10); // Wait for input
+        }
+        String state = Serial.readStringUntil('\n');
+        state.trim();
+        state.toInt() ? manualWaterMode = WateringMode::On : manualWaterMode = WateringMode::Off;
+    }
+    else if(input.equalsIgnoreCase("auto")) { // Auto =============================
+      Serial.println("Auto Mode");
+      currentSystemMode = SystemMode::Stop;
     }
     else {
       Serial.println("No such command. use: print, stop, dampers, pump");
