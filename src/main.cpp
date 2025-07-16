@@ -5,6 +5,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <algorithm>
+#include "esp_task_wdt.h"
 #include "SHTManager.h"
 #include "TimeClient.h"
 #include "S3Log.h"
@@ -28,7 +29,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.40";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.44";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
 // Setup ThingsBoard client
@@ -546,7 +547,7 @@ String timeToString(struct tm timeInfo) {
 
 void PrintSensors(){
   Serial.println("--------------------------------------------");
-  Serial.println("Ver: " + CURRENT_FIRMWARE_VERSION + "; Device ID: " + TOKEN);
+  Serial.println("Ver: " + CURRENT_FIRMWARE_VERSION);
   struct tm localTime;
   if(getLocalTime(&localTime)) Serial.println(timeToString(localTime));
   Serial.printf("System mode code %i: Mode = % s; PWM = %i; Water = %s; Dampers = %s\n", 
@@ -721,6 +722,12 @@ void HandleManualControl();
 // ==============================================================================
 void setup() {
   Serial.begin(115200);
+
+  // register to the esp whatchdog, so the esp will reset if get stuck
+  Serial.println("[Setup] initializing Watchdog");
+  esp_task_wdt_init(30, true); // 10 second timeout, panic/restart
+  esp_task_wdt_add(NULL);      // Add current thread to WDT
+
   Serial.println("----------------------------------------------------------");
   PrintPartitions();
   Serial.println("----------------------------------------------------------");
@@ -821,6 +828,9 @@ void loop() {
   }
 
   HandleManualControl();
+
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
 }
 
 // ==============================================================================
