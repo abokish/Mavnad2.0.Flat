@@ -29,7 +29,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.44";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.45";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
 
 // Setup ThingsBoard client
@@ -66,7 +66,7 @@ const int fanPins[] = {
   PIN_FAN_LEFT4
 };
 
-float START_COOLING_DEG = 26;
+float START_COOLING_DEG = 25.2;
 
 // OneWire setup
 DallasManager dallas(15);
@@ -403,7 +403,7 @@ AirValveMode getAirModeByRoom() {
   float roomRH = shtSensorsManager.getRoomRH();
   if(isnan(roomRH)) return airMode;
 
-  if(currentAirMode == AirValveMode::Open && roomRH > 75) airMode = AirValveMode::Close;
+  if(currentAirMode == AirValveMode::Open && roomRH > 70) airMode = AirValveMode::Close;
   if(currentAirMode == AirValveMode::Close && roomRH <= 60) airMode = AirValveMode::Open;
   return airMode;
 }
@@ -426,7 +426,7 @@ void onCool() {
   if(isnan(roomTemp) || roomTemp < START_COOLING_DEG) return;
 
   AirValveMode airMode = getAirModeByRoom();
-  float pwmPercentage = mapFloat(roomTemp, 25.0, 29.0, 70.0, 20.0);
+  float pwmPercentage = mapFloat(roomTemp, 25.0, 29.0, 20.0, 70.0);
   pwmPercentage = max(20.0f, min(70.0f, pwmPercentage)); // clamp the value
 
   WateringMode wateringMode = currentWatereMode;
@@ -571,7 +571,7 @@ void PrintSensors(){
   Serial.println("--------------------------------------------");
 }
 
-void setupWiFi(unsigned long timeoutMs) {
+void setupWiFi(unsigned long timeoutMs = 10000) {
     Serial.printf("[WiFi] Connecting to %s", WIFI_SSID);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
@@ -767,7 +767,7 @@ void setup() {
 
 
   Serial.println("[Setup] Connecting to WiFi");
-  setupWiFi(10000);
+  setupWiFi();
 
   Serial.println("[Setup] Initializing TimeClient");
   struct tm timeInfo = SetupTime();
@@ -816,7 +816,15 @@ void loop() {
     is2Minute = false;
   }
 
-    // Every 10 minutes
+  // Every 5 minutes
+  if((timeClient->getMinute() % 5) == 0) {
+    // check wifi connection
+    if(WiFi.status() != WL_CONNECTED) {
+      setupWiFi();
+    }
+  }
+
+  // Every 10 minutes
   if((timeClient->getMinute() % 10) == 0) {
     if(!isDataSent) {
       isDataSent = true;

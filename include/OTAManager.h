@@ -317,6 +317,7 @@ public:
 
     sendTelemetry("fw_state", "DOWNLOADING");
 
+    esp_task_wdt_delete(NULL); // removes current task from the watchdog
     while (http.connected() && written < contentLength) {
       size_t available = stream->available();
       if (available) {
@@ -344,6 +345,7 @@ public:
         }
       }
     }
+    esp_task_wdt_add(NULL); // adds the current thread (loopTask) back to the watchdog
 
     if (written != contentLength) {
       Serial.printf("[OTA] Mismatch! Written: %d bytes, Expected: %d bytes\n", written, contentLength);
