@@ -18,7 +18,9 @@
 // Wifi credentials
 // ===========================
 const char* WIFI_SSID = "ThermoTera";
+// const char* WIFI_SSID = "The Goldenberg’s";
 const char* WIFI_PASSWORD = "Thermo2007";
+// const char* WIFI_PASSWORD = "0523089060";
 
 // Timezone offset for GMT+3
 const long gmtOffset_sec = 3 * 3600; // 3 hours in seconds
@@ -29,8 +31,9 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.47";
-const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // "pm8z4oxs7awwcx68gwov"; //asaf - 
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.50";
+const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
+//const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
 // Setup ThingsBoard client
 WiFiClient wiFiClient;
@@ -46,10 +49,10 @@ const int PIN_FAN_LEFT2 = 38;
 const int PIN_FAN_LEFT3 = 39;
 const int PIN_FAN_LEFT4 = 40;
 
-const int PIN_PUMP_DRIPPERS = 16;
-const int PIN_DAMPER = 12;
-const int PIN_DAMPER_POWER = 11;
-const int PIN_PUMP_SPRINKLERS = 17;
+const int PIN_PUMP_DRIPPERS = 10;
+const int PIN_DAMPER = 16; // 12;
+const int PIN_DAMPER_POWER = 17; // 11;
+const int PIN_PUMP_SPRINKLERS = 13;
 
 const int FAN_CHANNEL = 0;
 const int FAN_FREQUENCY = 20000; // PWM frequency in Hz
@@ -84,6 +87,11 @@ bool isDataSent = false;
 enum AirValveMode {
   Close,
   Open
+};
+enum class DamperState {
+  Idle,
+  Opening,
+  Closing
 };
 
 // Define the possible statuses of the system
@@ -163,6 +171,10 @@ struct SystemModeHelper {
     return SystemMode::Stop;  // fallback
   }
 };
+
+DamperState damperState = DamperState::Idle;
+unsigned long damperActionStartTime = 0;
+const unsigned long DAMPER_ACTION_DURATION_MS = 20 * 1000;
 
 // Global variable to hold the current system status
 SystemMode currentSystemMode = SystemMode::Stop;
@@ -282,33 +294,57 @@ void offFans() {
 void onDampers() {
   debugMessage("on dampers");
   if(currentAirMode == AirValveMode::Open) return;
-  Serial.println("[Dampers] on");
+  if (damperState  != DamperState::Idle) return; // Already busy
+
+  Serial.println("[Dampers] open start");
 
   digitalWrite(PIN_DAMPER_POWER, HIGH);
   delay(100);
   digitalWrite(PIN_DAMPER, HIGH);
 
-  // Wait until the dampers get closed, and then turn off electricity
-  delay(1000 * 12); // 12 seconds
-  digitalWrite(PIN_DAMPER_POWER, LOW);
-  digitalWrite(PIN_DAMPER, LOW);
-
-  currentAirMode = AirValveMode::Open;
-  logModeToS3(getSystemStatusCode());
+  damperActionStartTime = millis();
+  damperState = DamperState::Opening;
 }
 
-void offDampers() {
+void offDampers(bool forceClose = false) {
   debugMessage("off dampers");
-  if(currentAirMode == AirValveMode::Close) return;
-  Serial.println("[Dampers] off");
+  if(!forceClose && currentAirMode == AirValveMode::Close) return;
+  if (damperState  != DamperState::Idle) return; // busy
+
+  Serial.println("[Dampers] close start");
 
   digitalWrite(PIN_DAMPER_POWER, HIGH);
-  delay(1000 * 12); // 12 seconds until dampers get closed
-  digitalWrite(PIN_DAMPER_POWER, LOW);
+  damperActionStartTime = millis();
+  damperState  = DamperState::Closing;
 
-  currentAirMode = AirValveMode::Close;
-  logModeToS3(getSystemStatusCode());
+  // delay(1000 * 12); // 12 seconds until dampers get closed
+  // digitalWrite(PIN_DAMPER_POWER, LOW);
+
+  // currentAirMode = AirValveMode::Close;
+  // logModeToS3(getSystemStatusCode());
 }
+
+void tickDampers() {
+  if (damperState == DamperState::Idle) return;
+
+  if (millis() - damperActionStartTime >= DAMPER_ACTION_DURATION_MS) {
+    digitalWrite(PIN_DAMPER_POWER, LOW);
+
+    if (damperState == DamperState::Opening) {
+      delay(10);
+      digitalWrite(PIN_DAMPER, LOW);
+      currentAirMode = AirValveMode::Open;
+      Serial.println("[Dampers] open complete");
+    } else if (damperState == DamperState::Closing) {
+      currentAirMode = AirValveMode::Close;
+      Serial.println("[Dampers] close complete");
+    }
+
+    damperState = DamperState::Idle;
+    logModeToS3(getSystemStatusCode());
+  }
+}
+
 
 void onSprinklers() {
   debugMessage("on sprinklers");
@@ -528,6 +564,7 @@ void updateSystemMode() {
 bool systemUpdated = false;
 void tick() {
   wateringBudget.tick(digitalRead(PIN_PUMP_DRIPPERS));
+  tickDampers();
 
   int currMin = timeClient->getMinute();
   if(currMin % 5 == 0 && systemUpdated == false) {
@@ -747,6 +784,9 @@ void setup() {
   digitalWrite(PIN_DAMPER, LOW);
   digitalWrite(PIN_PUMP_SPRINKLERS, LOW);
   digitalWrite(PIN_PUMP_DRIPPERS, LOW);
+
+  // close dampers forcely, to make sure the currentDampersState and the reality are one
+  offDampers(true);
 
   // Mosfet
   Serial.println("[setup] set mosfets");
