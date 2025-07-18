@@ -18,11 +18,12 @@ public:
    * @param slotDurationMs Length of each slot window in milliseconds.
    * @param budgetDurationMs Maximum ON time allowed per slot in milliseconds.
    */
-  TimeBudgetManager(unsigned long slotDurationMs, unsigned long budgetDurationMs)
+  TimeBudgetManager(unsigned long slotDurationMs, unsigned long budgetDurationMs, std::function<void()> onBudgetExceededCallback)
     : m_slotDuration(slotDurationMs),
       m_budgetDuration(budgetDurationMs),
       m_slotTimer(slotDurationMs),
-      m_budgetTimer(budgetDurationMs)
+      m_budgetTimer(budgetDurationMs),
+      m_onBudgetExceeded(onBudgetExceededCallback)
   {
     m_lastTick = millis();
   }
@@ -46,7 +47,16 @@ public:
     if (isOn) {
       if (m_budgetTimer > 0) {
         m_budgetTimer -= delta;
-        if (m_budgetTimer < 0) m_budgetTimer = 0;
+        if (m_budgetTimer < 0) { 
+          m_budgetTimer = 0;
+          
+          // Force water closing
+          if (m_onBudgetExceeded) {
+            m_onBudgetExceeded();
+          } else {
+            Serial.println("[TimeBudgetManager] !!! FATAL ERROR - Water budget is exceeded but no callback !!!");
+          }
+        }
       }
       m_dailyUsed += delta;
     }
@@ -138,4 +148,6 @@ private:
 
   // Total ON time used in the current day
   unsigned long m_dailyUsed = 0;
+
+  std::function<void()> m_onBudgetExceeded;
 };

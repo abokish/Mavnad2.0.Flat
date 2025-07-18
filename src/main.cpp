@@ -29,8 +29,8 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.45";
-const String TOKEN = "pm8z4oxs7awwcx68gwov"; //asaf - "8sqfmy0fdvacex3ef0mo";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.47";
+const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // "pm8z4oxs7awwcx68gwov"; //asaf - 
 
 // Setup ThingsBoard client
 WiFiClient wiFiClient;
@@ -46,10 +46,10 @@ const int PIN_FAN_LEFT2 = 38;
 const int PIN_FAN_LEFT3 = 39;
 const int PIN_FAN_LEFT4 = 40;
 
-const int PIN_PUMP = 13;
+const int PIN_PUMP_DRIPPERS = 16;
 const int PIN_DAMPER = 12;
 const int PIN_DAMPER_POWER = 11;
-const int PIN_SELENOID = 10;
+const int PIN_PUMP_SPRINKLERS = 17;
 
 const int FAN_CHANNEL = 0;
 const int FAN_FREQUENCY = 20000; // PWM frequency in Hz
@@ -172,7 +172,8 @@ WateringMode manualWaterMode = WateringMode::Off;
 int currentPWMSpeed = 0; // in percentage (0 - 100)
 const bool debugMode = false;
 
-TimeBudgetManager wateringBudget(5L * 60 * 1000, 0.25L * 60 * 1000);
+void offDrippers();
+TimeBudgetManager wateringBudget(5L * 60 * 1000, 0.25L * 60 * 1000, offDrippers);
 
 // Define a struct for relay configuration
 struct Relay {
@@ -309,49 +310,49 @@ void offDampers() {
   logModeToS3(getSystemStatusCode());
 }
 
-void onPump() {
-  debugMessage("on pump");
+void onSprinklers() {
+  debugMessage("on sprinklers");
   if(currentWatereMode == WateringMode::On) return;
-  Serial.println("[Pump] on");
+  Serial.println("[Sprinklers] on");
   
-  digitalWrite(PIN_PUMP, HIGH);
+  digitalWrite(PIN_PUMP_SPRINKLERS, HIGH);
   
   currentWatereMode = WateringMode::On;
   logModeToS3(getSystemStatusCode());
 }
 
-void offPump() {
-  debugMessage("off pump");
+void offSprinklers() {
+  debugMessage("off sprinklers");
   if(currentWatereMode == WateringMode::Off) return;
-  Serial.println("[Pump] off");
+  Serial.println("[Sprinklers] off");
   
-  digitalWrite(PIN_PUMP, LOW);
+  digitalWrite(PIN_PUMP_SPRINKLERS, LOW);
   
   currentWatereMode = WateringMode::Off;
   logModeToS3(getSystemStatusCode());
 }
 
-void offSelenoid() {
+void offDrippers() {
   if(currentWatereMode == WateringMode::Off) return;
-  Serial.println("[Selenoid] off");
-  digitalWrite(PIN_SELENOID, LOW);
+  Serial.println("[Drippers] off");
+  digitalWrite(PIN_PUMP_DRIPPERS, LOW);
   currentWatereMode = WateringMode::Off;
   logModeToS3(getSystemStatusCode());
 }
 
-void onSelenoid() {
-  debugMessage("on selenoid");
+void onDrippers() {
+  debugMessage("on drippers");
   if (!wateringBudget.isAllowed()) {
     // prints the message only once - the first time the water are on but not allowed. 
     // later the current mode will be already off
-    if(currentWatereMode == WateringMode::On) Serial.println("[Selenoid] Budget used up → cannot open");
-    offSelenoid();
+    if(currentWatereMode == WateringMode::On) Serial.println("[Drippers] Budget used up → cannot open");
+    offDrippers();
     return;
   }
   if(currentWatereMode == WateringMode::On) return;
 
-  Serial.println("[Selenoid] on");
-  digitalWrite(PIN_SELENOID, HIGH);
+  Serial.println("[Drippers] on");
+  digitalWrite(PIN_PUMP_DRIPPERS, HIGH);
   currentWatereMode = WateringMode::On;
   logModeToS3(getSystemStatusCode());
 }
@@ -360,8 +361,9 @@ void off() {
   debugMessage("off");
   if(currentSystemMode == SystemMode::Stop) return;
 
+  offSprinklers();
+  offDrippers();
   offFans();
-  offSelenoid();
   offDampers();
 
   currentSystemMode = SystemMode::Stop;
@@ -386,13 +388,13 @@ void setWater(WateringMode mode) {
   debugMessage("set water");
   switch(mode) {
     case WateringMode::Off:
-      offSelenoid();
+      offDrippers();
       break;
     case WateringMode::On:
-      onSelenoid();
+      onDrippers();
       break;
     default:
-      offSelenoid();
+      offDrippers();
       break;
   }
 }
@@ -469,7 +471,7 @@ void onHeat() {
 SystemMode lastSelectedMode = SystemMode::Stop;
 void updateSystemMode() {
   if(currentSystemMode == SystemMode::Manual) {
-    if(manualWaterMode == WateringMode::On) onSelenoid();
+    if(manualWaterMode == WateringMode::On) onDrippers();
     return;
   }
 
@@ -523,13 +525,14 @@ void updateSystemMode() {
   }
 }
 
-unsigned long lastTickMillis = 0;
+bool systemUpdated = false;
 void tick() {
-  wateringBudget.tick(currentWatereMode == WateringMode::On);
+  wateringBudget.tick(digitalRead(PIN_PUMP_DRIPPERS));
 
-  // every 5 minutes update the system mode (if needed)
-  if((timeClient->getMinute() % 5) == 0) { 
+  int currMin = timeClient->getMinute();
+  if(currMin % 5 == 0 && systemUpdated == false) {
     updateSystemMode();
+    systemUpdated = true;
   }
 }
 
@@ -725,7 +728,7 @@ void setup() {
 
   // register to the esp whatchdog, so the esp will reset if get stuck
   Serial.println("[Setup] initializing Watchdog");
-  esp_task_wdt_init(30, true); // 10 second timeout, panic/restart
+  esp_task_wdt_init(90, true); // 10 second timeout, panic/restart
   esp_task_wdt_add(NULL);      // Add current thread to WDT
 
   Serial.println("----------------------------------------------------------");
@@ -738,12 +741,12 @@ void setup() {
   Serial.println("[setup] set relays");
   pinMode(PIN_DAMPER, OUTPUT);
   pinMode(PIN_DAMPER_POWER, OUTPUT);
-  pinMode(PIN_PUMP, OUTPUT);
-  pinMode(PIN_SELENOID, OUTPUT);
+  pinMode(PIN_PUMP_SPRINKLERS, OUTPUT);
+  pinMode(PIN_PUMP_DRIPPERS, OUTPUT);
   digitalWrite(PIN_DAMPER_POWER, LOW);
   digitalWrite(PIN_DAMPER, LOW);
-  digitalWrite(PIN_PUMP, LOW);
-  digitalWrite(PIN_SELENOID, LOW);
+  digitalWrite(PIN_PUMP_SPRINKLERS, LOW);
+  digitalWrite(PIN_PUMP_DRIPPERS, LOW);
 
   // Mosfet
   Serial.println("[setup] set mosfets");
@@ -754,26 +757,39 @@ void setup() {
   }
   ledcWrite(FAN_CHANNEL, 0);
 
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
+
   // Setup SHT sensors manager
   Serial.println("[setup] SHT sensors manager:");
   shtSensorsManager.setupShtSensors();
 
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
+
   Serial.println("[setup] DS180B20 sensors manager:");
   dallas.begin();
   dallas.scanAndPrint();
-
   dallas.addSensor("in_wall",  {0x28, 0xE4, 0x74, 0x46, 0xD4, 0x26, 0x67, 0x7A});
   dallas.addSensor("roof_top", {0x28, 0xFF, 0x64, 0x1F, 0x69, 0xE9, 0x28, 0xE9});
 
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
 
   Serial.println("[Setup] Connecting to WiFi");
   setupWiFi();
+
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
 
   Serial.println("[Setup] Initializing TimeClient");
   struct tm timeInfo = SetupTime();
   timeClient = new TimeClient();
   if (!getLocalTime(&timeInfo)) Serial.println("[Time] Failed to get local time");
   else timeToString(timeInfo); // print time
+
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
 
   Serial.print("[Setup] Initializing S3Log ");
   dataLog = new S3Log("/log.txt", timeClient);
@@ -795,7 +811,14 @@ void setup() {
 
   Serial.println("[setup] setup done successfuly!");
 
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
+
   PrintSensors();
+  updateSystemMode();
+
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
 }
 
 // ==============================================================================
@@ -874,23 +897,23 @@ void HandleManualControl(){
         state.trim();
         state.toInt() ? onDampers() : offDampers();
     }
-    else if (input.equalsIgnoreCase("pump")) {  // PUMP ==============================
+    else if (input.equalsIgnoreCase("sprink")) {  // SPRINKLERS ==============================
       Serial.println("Enter state (1 = Open, 0 = Close): ");
         while (!Serial.available()) {
             delay(10); // Wait for input
         }
         String state = Serial.readStringUntil('\n');
         state.trim();
-        state.toInt() ? onPump() : offPump();
+        state.toInt() ? onSprinklers() : offSprinklers();
     }
-    else if (input.equalsIgnoreCase("selenoid")) {  // SELENOID ==============================
+    else if (input.equalsIgnoreCase("drip")) {  // DRIPPERS ==============================
       Serial.println("Enter state (1 = Open, 0 = Close): ");
         while (!Serial.available()) {
             delay(10); // Wait for input
         }
         String state = Serial.readStringUntil('\n');
         state.trim();
-        state.toInt() ? onSelenoid() : offSelenoid();
+        state.toInt() ? onDrippers() : offDrippers();
     }
     else if (input.equalsIgnoreCase("relay")) {  // Relay ==============================
       Serial.println("Enter relay pin number: ");
@@ -939,14 +962,24 @@ void HandleManualControl(){
         }
         String state = Serial.readStringUntil('\n');
         state.trim();
-        state.toInt() ? manualWaterMode = WateringMode::On : manualWaterMode = WateringMode::Off;
+        if(state.toInt()) {
+          Serial.println("manual watering on");
+          currentSystemMode = SystemMode::Manual;
+          manualWaterMode = WateringMode::On;
+        } else {
+          Serial.println("manual watering off");
+          currentSystemMode = SystemMode::Stop;
+          manualWaterMode = WateringMode::Off;
+          updateSystemMode();
+        }
     }
     else if(input.equalsIgnoreCase("auto")) { // Auto =============================
       Serial.println("Auto Mode");
       currentSystemMode = SystemMode::Stop;
+      updateSystemMode();
     }
     else {
-      Serial.println("No such command. use: print, stop, dampers, pump");
+      Serial.println("No such command. use: print, stop, dampers, drip, sprink");
     }
   }
 }
