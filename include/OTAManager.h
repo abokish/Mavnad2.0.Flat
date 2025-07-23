@@ -26,6 +26,8 @@ public:
   std::function<void(int)> setWaterBudgetFunc;
   std::function<bool()> getSystemAutoModeFunc;
   std::function<void(bool)> setSystemAutoModeFunc;
+  std::function<bool()> getDrippersAutoModeFunc;
+  std::function<void(bool)> setDrippersAutoModeFunc;
 
   OTAManager(PubSubClient &mqttClient, const String& fwVersion, const String& deviceToken)
     : m_mqttClient(mqttClient), m_fwVersion(fwVersion), m_token(deviceToken) {
@@ -166,6 +168,15 @@ public:
       bool mode = doc["params"] | false;
       setSystemAutoModeFunc(mode);
       Serial.printf("[RPC] Set system auto mode to: %d\n", mode);
+    } else if (method == "getDrippersAutoMode") {  // ====== getDrippersAutoMode
+      bool mode = getDrippersAutoModeFunc();
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), String(mode).c_str());
+      Serial.printf("[RPC] Sent drippers auto mode status: %d\n", mode);
+    } else if (method == "setDrippersAutoMode") {  // ======= setDrippersAutoMode
+      bool mode = doc["params"] | false;
+      setDrippersAutoModeFunc(mode);
+      Serial.printf("[RPC] Set drippers auto mode to: %d\n", mode);
     } else {
       Serial.println("[RPC] Unknown method.");
     }

@@ -47,11 +47,12 @@ public:
     if (isOn) {
       if (m_budgetTimer > 0) {
         m_budgetTimer -= delta;
-        if (m_budgetTimer < 0) { 
+        if (m_budgetTimer <= 0) { 
           m_budgetTimer = 0;
           
           // Force water closing
           if (m_onBudgetExceeded) {
+            Serial.println("[TimeBudgetManager] Budget used up → cannot open");
             m_onBudgetExceeded();
           } else {
             Serial.println("[TimeBudgetManager] !!! FATAL ERROR - Water budget is exceeded but no callback !!!");

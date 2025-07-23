@@ -2,11 +2,12 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <LittleFS.h>
+#include <Wire.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <algorithm>
 #include "esp_task_wdt.h"
-#include "SHTManager.h"
+#include "SHTManager_RS485.h"
 #include "TimeClient.h"
 #include "S3Log.h"
 #include "DallasManager.h"
@@ -31,7 +32,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.50";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.61";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
 //const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
@@ -49,14 +50,18 @@ const int PIN_FAN_LEFT2 = 38;
 const int PIN_FAN_LEFT3 = 39;
 const int PIN_FAN_LEFT4 = 40;
 
-const int PIN_PUMP_DRIPPERS = 10;
-const int PIN_DAMPER = 16; // 12;
-const int PIN_DAMPER_POWER = 17; // 11;
-const int PIN_PUMP_SPRINKLERS = 13;
-
 const int FAN_CHANNEL = 0;
 const int FAN_FREQUENCY = 20000; // PWM frequency in Hz
 const int FAN_RESOLUTION = 8;  // 8-bit resolution (0-255)
+
+const int PIN_PUMP_DRIPPERS = 13;
+const int PIN_DAMPER = 12;
+const int PIN_DAMPER_POWER = 11;
+const int PIN_PUMP_SPRINKLERS = 10;
+
+const int PUMP_PWM_CHANNEL = 1;
+const int PUMP_PWM_FREQ = 1000;     // 1 kHz (safe value within 100–2000 Hz)
+const int PUMP_PWM_RESOLUTION = 8;  // 8-bit (0–255)
 
 const int fanPins[] = { 
   PIN_FAN_RIGHT1, 
@@ -78,7 +83,8 @@ DallasManager dallas(15);
 
 // Define the relay pins for the air valves
 const int airValvesRelayPins[] = { PIN_DAMPER };
-SHTManager shtSensorsManager;
+HardwareSerial RS485Serial(2); // UART2
+SHTManager_RS485 shtSensorsManager(RS485Serial);
 S3Log* dataLog;
 TimeClient* timeClient;
 bool isDataSent = false;
@@ -172,20 +178,19 @@ struct SystemModeHelper {
   }
 };
 
-DamperState damperState = DamperState::Idle;
-unsigned long damperActionStartTime = 0;
-const unsigned long DAMPER_ACTION_DURATION_MS = 20 * 1000;
-
 // Global variable to hold the current system status
+DamperState damperState = DamperState::Idle;
 SystemMode currentSystemMode = SystemMode::Stop;
 AirValveMode currentAirMode = AirValveMode::Close;
 WateringMode currentWatereMode = WateringMode::Off;
 WateringMode manualWaterMode = WateringMode::Off;
 int currentPWMSpeed = 0; // in percentage (0 - 100)
-const bool debugMode = false;
+bool debugMode = false;
+unsigned long damperActionStartTime = 0;
+const unsigned long DAMPER_ACTION_DURATION_MS = 30 * 1000;
 
 void offDrippers();
-TimeBudgetManager wateringBudget(5L * 60 * 1000, 0.25L * 60 * 1000, offDrippers);
+TimeBudgetManager wateringBudget(2L * 60 * 1000, 0.25L * 60 * 1000, offDrippers);
 
 // Define a struct for relay configuration
 struct Relay {
@@ -368,15 +373,28 @@ void offSprinklers() {
   logModeToS3(getSystemStatusCode());
 }
 
+void setDrippersPumpSpeed(int percent) {
+  if (percent < 20) {
+    percent = 0;  // stop
+  } else if (percent > 90) {
+    percent = 100;  // full speed
+  }
+  int duty = map(percent, 0, 100, 0, 255);
+  ledcWrite(PUMP_PWM_CHANNEL, duty);
+}
+
 void offDrippers() {
   if(currentWatereMode == WateringMode::Off) return;
   Serial.println("[Drippers] off");
-  digitalWrite(PIN_PUMP_DRIPPERS, LOW);
+
+  //digitalWrite(PIN_PUMP_DRIPPERS, LOW);
+  setDrippersPumpSpeed(0);
+
   currentWatereMode = WateringMode::Off;
   logModeToS3(getSystemStatusCode());
 }
 
-void onDrippers() {
+void onDrippers(int percentage = 40) {
   debugMessage("on drippers");
   if (!wateringBudget.isAllowed()) {
     // prints the message only once - the first time the water are on but not allowed. 
@@ -388,7 +406,10 @@ void onDrippers() {
   if(currentWatereMode == WateringMode::On) return;
 
   Serial.println("[Drippers] on");
-  digitalWrite(PIN_PUMP_DRIPPERS, HIGH);
+
+  //digitalWrite(PIN_PUMP_DRIPPERS, HIGH);
+  setDrippersPumpSpeed(percentage);
+
   currentWatereMode = WateringMode::On;
   logModeToS3(getSystemStatusCode());
 }
@@ -563,14 +584,14 @@ void updateSystemMode() {
 
 bool systemUpdated = false;
 void tick() {
-  wateringBudget.tick(digitalRead(PIN_PUMP_DRIPPERS));
+  wateringBudget.tick(currentWatereMode == WateringMode::On); // (digitalRead(PIN_PUMP_DRIPPERS));
   tickDampers();
 
-  int currMin = timeClient->getMinute();
-  if(currMin % 5 == 0 && systemUpdated == false) {
+  //int currMin = timeClient->getMinute();
+  //if(currMin % 5 == 0 && systemUpdated == false) {
     updateSystemMode();
-    systemUpdated = true;
-  }
+  //  systemUpdated = true;
+  //}
 }
 
 String timeToString(struct tm timeInfo) {
@@ -750,10 +771,23 @@ bool getSystemAutoMode() {
   return currentSystemMode != SystemMode::Manual;
 }
 
-bool setSystemAutoMode(bool autoMode) {
+void setSystemAutoMode(bool autoMode) {
   currentSystemMode = autoMode ? SystemMode::Stop : SystemMode::Manual;
 }
 
+bool getDrippersAutoMode(bool autoMode) {
+  // any mode that is not Manual is auto
+  return manualWaterMode;
+}
+
+void setDrippersAutoMode(bool autoMode) {
+  if(autoMode) {
+    manualWaterMode = WateringMode::Off; // turn off manual mode
+  } else {
+    manualWaterMode = WateringMode::On; // turn on manual mode
+    currentSystemMode = SystemMode::Manual; // turn on system mode
+  }
+} 
 
 void HandleManualControl();
 
@@ -780,10 +814,15 @@ void setup() {
   pinMode(PIN_DAMPER_POWER, OUTPUT);
   pinMode(PIN_PUMP_SPRINKLERS, OUTPUT);
   pinMode(PIN_PUMP_DRIPPERS, OUTPUT);
+
   digitalWrite(PIN_DAMPER_POWER, LOW);
   digitalWrite(PIN_DAMPER, LOW);
   digitalWrite(PIN_PUMP_SPRINKLERS, LOW);
   digitalWrite(PIN_PUMP_DRIPPERS, LOW);
+
+  ledcSetup(PUMP_PWM_CHANNEL, PUMP_PWM_FREQ, PUMP_PWM_RESOLUTION);
+  ledcAttachPin(PIN_PUMP_DRIPPERS, PUMP_PWM_CHANNEL);
+  setDrippersPumpSpeed(0); // start off
 
   // close dampers forcely, to make sure the currentDampersState and the reality are one
   offDampers(true);
@@ -801,8 +840,12 @@ void setup() {
   esp_task_wdt_reset();
 
   // Setup SHT sensors manager
-  Serial.println("[setup] SHT sensors manager:");
-  shtSensorsManager.setupShtSensors();
+  Serial.println("[setup] SHT RS485 sensors manager:");
+  shtSensorsManager.setSensorAddr(SHTManager_RS485::AMBIANT, 1);
+  shtSensorsManager.setSensorAddr(SHTManager_RS485::BEFORE, 2);
+  shtSensorsManager.setSensorAddr(SHTManager_RS485::AFTER, 3);
+  shtSensorsManager.setSensorAddr(SHTManager_RS485::ROOM, 4);
+  shtSensorsManager.begin(9600); // or 4800 if not yet reconfigured
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
@@ -1012,6 +1055,47 @@ void HandleManualControl(){
           manualWaterMode = WateringMode::Off;
           updateSystemMode();
         }
+    }
+    else if (input.equalsIgnoreCase("shtcfg")) {  // SHT31 RS485 CONFIG ==============================
+      Serial.println("Enter current sensor address (1-247): ");
+      while (!Serial.available()) delay(10);
+      int oldAddr = Serial.readStringUntil('\n').toInt();
+
+      Serial.println("Enter new sensor address (1-247): ");
+      while (!Serial.available()) delay(10);
+      int newAddr = Serial.readStringUntil('\n').toInt();
+
+      Serial.println("Enter baud rate (0=2400, 1=4800, 2=9600): ");
+      while (!Serial.available()) delay(10);
+      int baudCode = Serial.readStringUntil('\n').toInt();
+
+      // Step 1: Begin at 4800 (default)
+      shtSensorsManager.begin(4800);
+
+      // Step 2: Set new address and baud
+      bool ok = shtSensorsManager.setSensorAddressAndBaud(oldAddr, newAddr, baudCode);
+      if (ok) {
+        Serial.println("Sensor address/baud updated successfully.");
+      } else {
+        Serial.println("Failed to update sensor address/baud.");
+      }
+
+      delay(200); // Give sensor time to switch
+
+      // Step 3: Return to 9600 for normal operation
+      shtSensorsManager.begin(9600);
+    }
+    else if (input.equalsIgnoreCase("shtscan")) {  // SHT31 RS485 SCAN ==============================
+      Serial.println("Scanning RS485 bus at all common baud rates (2400, 4800, 9600)...");
+      shtSensorsManager.scanRS485AllBauds(RS485Serial);
+    }
+    else if(input.equalsIgnoreCase("debug")) { // Debug Mode =============================
+      Serial.println("Debug Mode");
+      debugMode = true;
+    }
+    else if(input.equalsIgnoreCase("nodebug")) { // No Debug Mode =============================
+      Serial.println("No Debug Mode");
+      debugMode = false;
     }
     else if(input.equalsIgnoreCase("auto")) { // Auto =============================
       Serial.println("Auto Mode");

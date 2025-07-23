@@ -191,6 +191,8 @@ public:
         return NAN; 
     };
 
+    
+
     float getBeforeTemp() {
         float temp = cleanReading([&]() { return sht31_Before->readTemperature(); });
         return temp;
