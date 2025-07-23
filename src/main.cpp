@@ -880,7 +880,7 @@ void setup() {
   Serial.println("[Setup] Initializing ThingsBoard");
   otaManager.begin();
   otaManager.getFanSpeedFunc = getFanSpeed;
-  otaManager.setFanSpeedFunc = onFans;
+  otaManager.setFanSpeedFunc = setFanSpeed;
   otaManager.getDampersStatusFunc = getDampersStatus;
   otaManager.setDampersStatusFunc = setDampersStatus;
   otaManager.getSolenoidStatusFunc = getSolenoidStatus;
