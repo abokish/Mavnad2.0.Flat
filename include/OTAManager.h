@@ -161,8 +161,9 @@ public:
       Serial.printf("[RPC] Set water baudget to: %d\n", budget);
     } else if (method == "getSystemAutoMode") {  // ====== getSystemAutoMode
       bool mode = getSystemAutoModeFunc();
+      String modeStr = mode ? "true" : "false";
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      m_mqttClient.publish(responseTopic.c_str(), String(mode).c_str());
+      m_mqttClient.publish(responseTopic.c_str(), modeStr.c_str());
       Serial.printf("[RPC] Sent system auto mode status: %d\n", mode);
     } else if (method == "setSystemAutoMode") {  // ======= setSystemAutoMode
       bool mode = doc["params"] | false;
