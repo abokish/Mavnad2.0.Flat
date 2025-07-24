@@ -7,6 +7,7 @@
 #include <DallasTemperature.h>
 #include <algorithm>
 #include "esp_task_wdt.h"
+#include "SHTManager.h"
 #include "SHTManager_RS485.h"
 #include "TimeClient.h"
 #include "S3Log.h"
@@ -83,8 +84,10 @@ DallasManager dallas(15);
 
 // Define the relay pins for the air valves
 const int airValvesRelayPins[] = { PIN_DAMPER };
+
+SHTManager shtI2CManager; // For I2C sensors
 HardwareSerial RS485Serial(2); // UART2
-SHTManager_RS485 shtSensorsManager(RS485Serial);
+SHTManager_RS485 shtRS485Manager(RS485Serial); // For RS485 sensors
 S3Log* dataLog;
 TimeClient* timeClient;
 bool isDataSent = false;
@@ -459,7 +462,7 @@ void setWater(WateringMode mode) {
 AirValveMode getAirModeByRoom() {
   debugMessage("get air mode by room");
   AirValveMode airMode = currentAirMode;
-  float roomRH = shtSensorsManager.getRoomRH();
+  float roomRH = shtI2CManager.getRoomRH();
   if(isnan(roomRH)) return airMode;
 
   if(currentAirMode == AirValveMode::Open && roomRH > 70) airMode = AirValveMode::Close;
@@ -481,7 +484,7 @@ float mapFloat(float x, float in_min, float in_max, float out_min, float out_max
 
 void onCool() {
   debugMessage("on cool");
-  float roomTemp = shtSensorsManager.getRoomTemp();
+  float roomTemp = shtI2CManager.getRoomTemp();
   if(isnan(roomTemp) || roomTemp < START_COOLING_DEG) return;
 
   AirValveMode airMode = getAirModeByRoom();
@@ -489,7 +492,7 @@ void onCool() {
   pwmPercentage = max(20.0f, min(70.0f, pwmPercentage)); // clamp the value
 
   WateringMode wateringMode = currentWatereMode;
-  float beforeRH = shtSensorsManager.getBeforeRH();
+  float beforeRH = shtI2CManager.getBeforeRH();
   if(!isnan(beforeRH))
     if(beforeRH <= 80) wateringMode = WateringMode::On; 
     else wateringMode = WateringMode::Off;
@@ -504,9 +507,9 @@ void onRegenerate() {
 
   // Gets water mode
   WateringMode waterMode = currentWatereMode;
-  float beforeRh = shtSensorsManager.getBeforeRH();
-  //if(currentWatereMode == WateringMode::Off && shtSensorsManager.getBeforeRH() <= 90) waterMode = WateringMode::On;
-  //if(currentWatereMode == WateringMode::On && shtSensorsManager.getBeforeRH() > 95) waterMode = WateringMode::Off;
+  float beforeRh = shtI2CManager.getBeforeRH();
+  //if(currentWatereMode == WateringMode::Off && shtRS485Manager.getBeforeRH() <= 90) waterMode = WateringMode::On;
+  //if(currentWatereMode == WateringMode::On && shtRS485Manager.getBeforeRH() > 95) waterMode = WateringMode::Off;
   if(!isnan(beforeRh))
     if(beforeRh <= 95) waterMode = WateringMode::On;
     else waterMode = WateringMode::Off;
@@ -619,14 +622,28 @@ void PrintSensors(){
               currentAirMode == AirValveMode::Open ? "Open" : "Close");
   wateringBudget.printStatus("Watering");
 
-  Serial.print("Ambiant: Temp = " + (String)shtSensorsManager.getAmbiantTemp());
-  Serial.println("; RH = " + (String)shtSensorsManager.getAmbiantRH());
-  Serial.print("Before: Temp = " + (String)shtSensorsManager.getBeforeTemp());
-  Serial.println("; RH = " + (String)shtSensorsManager.getBeforeRH());
-  Serial.print("After: Temp= " + (String)shtSensorsManager.getAfterTemp());
-  Serial.println("; RH = " + (String)shtSensorsManager.getAfterRH());
-  Serial.print("Room: Temp = " + (String)shtSensorsManager.getRoomTemp());
-  Serial.println("; RH = " + (String)shtSensorsManager.getRoomRH());
+  // I2C SHT31 sensors
+  Serial.println("I2C SHT31 sensors:");
+  Serial.print("Ambiant: Temp = " + (String)shtI2CManager.getAmbiantTemp());
+  Serial.println("; RH = " + (String)shtI2CManager.getAmbiantRH());
+  Serial.print("Before: Temp = " + (String)shtI2CManager.getBeforeTemp());
+  Serial.println("; RH = " + (String)shtI2CManager.getBeforeRH());
+  Serial.print("After: Temp= " + (String)shtI2CManager.getAfterTemp());
+  Serial.println("; RH = " + (String)shtI2CManager.getAfterRH());
+  Serial.print("Room: Temp = " + (String)shtI2CManager.getRoomTemp());
+  Serial.println("; RH = " + (String)shtI2CManager.getRoomRH());  
+
+  // RS485 SHT31 sensors
+  Serial.println("RS485 SHT31 sensors:");
+  Serial.print("Ambiant: Temp = " + (String)shtRS485Manager.getAmbiantTemp());
+  Serial.println("; RH = " + (String)shtRS485Manager.getAmbiantRH());
+  Serial.print("Before: Temp = " + (String)shtRS485Manager.getBeforeTemp());
+  Serial.println("; RH = " + (String)shtRS485Manager.getBeforeRH());
+  Serial.print("After: Temp= " + (String)shtRS485Manager.getAfterTemp());
+  Serial.println("; RH = " + (String)shtRS485Manager.getAfterRH());
+  Serial.print("Room: Temp = " + (String)shtRS485Manager.getRoomTemp());
+  Serial.println("; RH = " + (String)shtRS485Manager.getRoomRH());
+
   Serial.println("In Wall: Temp = " + (String)dallas.getTemperature("in_wall"));
   Serial.println("Roof Top: Temp = " + (String)dallas.getTemperature("roof_top"));
   Serial.println("--------------------------------------------");
@@ -690,31 +707,63 @@ void PrintPartitions() {
 
 void sendTelemetry() {
   // ThingsBoard server
-  otaManager.sendTelemetry("Before_Temp", FloatValidityCheck(shtSensorsManager.getBeforeTemp()));
-  otaManager.sendTelemetry("Before_RH", FloatValidityCheck(shtSensorsManager.getBeforeRH()));
-  otaManager.sendTelemetry("After_Temp", FloatValidityCheck(shtSensorsManager.getAfterTemp()));
-  otaManager.sendTelemetry("After_RH", FloatValidityCheck(shtSensorsManager.getAfterRH()));
-  otaManager.sendTelemetry("Ambiant_Temp", FloatValidityCheck(shtSensorsManager.getAmbiantTemp()));
-  otaManager.sendTelemetry("Ambiant_RH", FloatValidityCheck(shtSensorsManager.getAmbiantRH()));
-  otaManager.sendTelemetry("Room_Temp", FloatValidityCheck(shtSensorsManager.getRoomTemp()));
-  otaManager.sendTelemetry("Room_RH", FloatValidityCheck(shtSensorsManager.getRoomRH()));
-  otaManager.sendTelemetry("In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
-  otaManager.sendTelemetry("Roof_Top_Temp", FloatValidityCheck(dallas.getTemperature("roof_top")));
+  // RS485 SHT31 sensors
+  otaManager.sendTelemetry("RS485_Ambiant_Temp", FloatValidityCheck(shtRS485Manager.getAmbiantTemp()));
+  otaManager.sendTelemetry("RS485_Ambiant_RH", FloatValidityCheck(shtRS485Manager.getAmbiantRH()));
+  otaManager.sendTelemetry("RS485_Before_Temp", FloatValidityCheck(shtRS485Manager.getBeforeTemp()));
+  otaManager.sendTelemetry("RS485_Before_RH", FloatValidityCheck(shtRS485Manager.getBeforeRH()));
+  otaManager.sendTelemetry("RS485_After_Temp", FloatValidityCheck(shtRS485Manager.getAfterTemp()));
+  otaManager.sendTelemetry("RS485_After_RH", FloatValidityCheck(shtRS485Manager.getAfterRH()));
+  otaManager.sendTelemetry("RS485_Room_Temp", FloatValidityCheck(shtRS485Manager.getRoomTemp()));
+  otaManager.sendTelemetry("RS485_Room_RH", FloatValidityCheck(shtRS485Manager.getRoomRH()));
+
+  // I2C SHT31 sensors
+  otaManager.sendTelemetry("I2C_Ambiant_Temp", FloatValidityCheck(shtI2CManager.getAmbiantTemp()));
+  otaManager.sendTelemetry("I2C_Ambiant_RH", FloatValidityCheck(shtI2CManager.getAmbiantRH()));
+  otaManager.sendTelemetry("I2C_Before_Temp", FloatValidityCheck(shtI2CManager.getBeforeTemp()));
+  otaManager.sendTelemetry("I2C_Before_RH", FloatValidityCheck(shtI2CManager.getBeforeRH()));
+  otaManager.sendTelemetry("I2C_After_Temp", FloatValidityCheck(shtI2CManager.getAfterTemp()));
+  otaManager.sendTelemetry("I2C_After_RH", FloatValidityCheck(shtI2CManager.getAfterRH()));
+  otaManager.sendTelemetry("I2C_Room_Temp", FloatValidityCheck(shtI2CManager.getRoomTemp()));
+  otaManager.sendTelemetry("I2C_Room_RH", FloatValidityCheck(shtI2CManager.getRoomRH()));
+  
+  // Dallas sensors
+  otaManager.sendTelemetry("I2C_In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
+  otaManager.sendTelemetry("I2C_Roof_Top_Temp", FloatValidityCheck(dallas.getTemperature("roof_top")));
+  
+  // System status
   otaManager.sendTelemetry("System_Status", getSystemStatusCode());
+
   delay(300);
 
   // S3 server
-  logToS3("After", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getAfterTemp())); 
-  logToS3("After", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getAfterRH()));
-  logToS3("Before", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getBeforeTemp())); 
-  logToS3("Before", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getBeforeRH()));
-  logToS3("Room", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getRoomTemp())); 
-  logToS3("Room", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getRoomRH()));
-  logToS3("Ambiant", "SHT31", "deg_c", FloatValidityCheck(shtSensorsManager.getAmbiantTemp())); 
-  logToS3("Ambiant", "SHT31", "rh", FloatValidityCheck(shtSensorsManager.getAmbiantRH()));
-  logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // mode data must be in location "cooler"
+  // RS485 SHT31 sensors
+  logToS3("RS485After", "SHT31", "deg_c", FloatValidityCheck(shtRS485Manager.getAfterTemp())); 
+  logToS3("RS485After", "SHT31", "rh", FloatValidityCheck(shtRS485Manager.getAfterRH()));
+  logToS3("RS485Before", "SHT31", "deg_c", FloatValidityCheck(shtRS485Manager.getBeforeTemp())); 
+  logToS3("RS485Before", "SHT31", "rh", FloatValidityCheck(shtRS485Manager.getBeforeRH()));
+  logToS3("RS485Room", "SHT31", "deg_c", FloatValidityCheck(shtRS485Manager.getRoomTemp())); 
+  logToS3("RS485Room", "SHT31", "rh", FloatValidityCheck(shtRS485Manager.getRoomRH()));
+  logToS3("RS485Ambiant", "SHT31", "deg_c", FloatValidityCheck(shtRS485Manager.getAmbiantTemp())); 
+  logToS3("RS485Ambiant", "SHT31", "rh", FloatValidityCheck(shtRS485Manager.getAmbiantRH()));
+  
+  // I2C SHT31 sensors
+  logToS3("I2CAmbiant", "SHT31", "deg_c", FloatValidityCheck(shtI2CManager.getAmbiantTemp())); 
+  logToS3("I2CAmbiant", "SHT31", "rh", FloatValidityCheck(shtI2CManager.getAmbiantRH()));
+  logToS3("I2CBefore", "SHT31", "deg_c", FloatValidityCheck(shtI2CManager.getBeforeTemp()));
+  logToS3("I2CBefore", "SHT31", "rh", FloatValidityCheck(shtI2CManager.getBeforeRH()));
+  logToS3("I2CAfter", "SHT31", "deg_c", FloatValidityCheck(shtI2CManager.getAfterTemp()));
+  logToS3("I2CAfter", "SHT31", "rh", FloatValidityCheck(shtI2CManager.getAfterRH()));
+  logToS3("I2CRoom", "SHT31", "deg_c", FloatValidityCheck(shtI2CManager.getRoomTemp()));
+  logToS3("I2CRoom", "SHT31", "rh", FloatValidityCheck(shtI2CManager.getRoomRH()));
+  
+  // Dallas sensors
   logToS3("In_Wall", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("in_wall"))); 
   logToS3("Roof_Top", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("roof_top"))); 
+
+  // System status
+  logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // mode data must be in location "cooler"
+
   delay(300);
   dataLog->uploadDataFile(SITE_NAME, BUILDING_NAME, "Mavnad1");
 }
@@ -839,13 +888,20 @@ void setup() {
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
 
+  // I2C SHT sensors manager
+  Serial.println("[setup] SHT I2C sensors manager:");
+  shtI2CManager.setupShtSensors();
+
+  // I'm still alive - Reset watchdog to prevent timeout
+  esp_task_wdt_reset();
+
   // Setup SHT sensors manager
   Serial.println("[setup] SHT RS485 sensors manager:");
-  shtSensorsManager.setSensorAddr(SHTManager_RS485::AMBIANT, 1);
-  shtSensorsManager.setSensorAddr(SHTManager_RS485::BEFORE, 2);
-  shtSensorsManager.setSensorAddr(SHTManager_RS485::AFTER, 3);
-  shtSensorsManager.setSensorAddr(SHTManager_RS485::ROOM, 4);
-  shtSensorsManager.begin(9600); // or 4800 if not yet reconfigured
+  shtRS485Manager.setSensorAddr(SHTManager_RS485::AMBIANT, 1);
+  shtRS485Manager.setSensorAddr(SHTManager_RS485::BEFORE, 2);
+  shtRS485Manager.setSensorAddr(SHTManager_RS485::AFTER, 3);
+  shtRS485Manager.setSensorAddr(SHTManager_RS485::ROOM, 4);
+  shtRS485Manager.begin(4800);
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
@@ -1069,11 +1125,8 @@ void HandleManualControl(){
       while (!Serial.available()) delay(10);
       int baudCode = Serial.readStringUntil('\n').toInt();
 
-      // Step 1: Begin at 4800 (default)
-      shtSensorsManager.begin(4800);
-
-      // Step 2: Set new address and baud
-      bool ok = shtSensorsManager.setSensorAddressAndBaud(oldAddr, newAddr, baudCode);
+      // Set new address and baud
+      bool ok = shtRS485Manager.setSensorAddressAndBaud(oldAddr, newAddr, baudCode);
       if (ok) {
         Serial.println("Sensor address/baud updated successfully.");
       } else {
@@ -1081,13 +1134,21 @@ void HandleManualControl(){
       }
 
       delay(200); // Give sensor time to switch
-
-      // Step 3: Return to 9600 for normal operation
-      shtSensorsManager.begin(9600);
+    }
+    else if (input.equalsIgnoreCase("shtbaud")) {  // SHT31 RS485 SERIAL BAUD CHANGE ==============================
+      Serial.println("Enter new baud rate (e.g. 2400, 4800, 9600): ");
+      while (!Serial.available()) delay(10);
+      int newBaud = Serial.readStringUntil('\n').toInt();
+      if (newBaud == 2400 || newBaud == 4800 || newBaud == 9600) {
+        shtRS485Manager.begin(newBaud);
+        Serial.printf("RS485 serial baud rate changed to %d.\n", newBaud);
+      } else {
+        Serial.println("Invalid baud rate. Allowed: 2400, 4800, 9600.");
+      }
     }
     else if (input.equalsIgnoreCase("shtscan")) {  // SHT31 RS485 SCAN ==============================
       Serial.println("Scanning RS485 bus at all common baud rates (2400, 4800, 9600)...");
-      shtSensorsManager.scanRS485AllBauds(RS485Serial);
+      shtRS485Manager.scanRS485AllBauds(RS485Serial);
     }
     else if(input.equalsIgnoreCase("debug")) { // Debug Mode =============================
       Serial.println("Debug Mode");
