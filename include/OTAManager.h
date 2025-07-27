@@ -116,68 +116,88 @@ public:
 
     if (method == "getFanSpeed") {  // =============== getFanSpeed
       int fanSpeed = getFanSpeedFunc();
+      String response = String(fanSpeed);
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      m_mqttClient.publish(responseTopic.c_str(), String(fanSpeed).c_str());
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
       Serial.printf("[RPC] Sent fan speed: %d\n", fanSpeed);
+
     } else if (method == "setFanSpeed") { // ========== setFansSpeed
       int newSpeed = doc["params"] | 0;
       setFanSpeedFunc(newSpeed);
       Serial.printf("[RPC] Set fan speed to: %d\n", newSpeed);
+
     } else if (method == "getDampersStatus") {  // ====== getDampersStatus
       bool state = getDampersStatusFunc();
+      String response = state ? "true" : "false";
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      m_mqttClient.publish(responseTopic.c_str(), String(state).c_str());
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
       Serial.printf("[RPC] Sent dampers status: %d\n", state);
+
     } else if (method == "setDampersStatus") {  // ======= setDampersStatus
       bool state = doc["params"] | false;
       setDampersStatusFunc(state);
       Serial.printf("[RPC] Set dampers status to: %d\n", state);
+
     } else if (method == "getSolenoidStatus") {  // ====== getSolenoidStatus
       bool state = getSolenoidStatusFunc();
+      String response = state ? "true" : "false";
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      m_mqttClient.publish(responseTopic.c_str(), String(state).c_str());
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
       Serial.printf("[RPC] Sent solenoid status: %d\n", state);
+
     } else if (method == "setSolenoidStatus") {  // ======= setSolenoidStatus
       bool state = doc["params"] | false;
       setSolenoidStatusFunc(state);
       Serial.printf("[RPC] Set solenoid status to: %d\n", state);
+
     } else if (method == "getWaterSlot") {  // ====== getSlot
       int slot = getWaterSlotFunc();
+      String response = String(slot);
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      m_mqttClient.publish(responseTopic.c_str(), String(slot).c_str());
-      Serial.printf("[RPC] Sent solenoid status: %d\n", slot);
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
+      Serial.printf("[RPC] Sent water slot: %d\n", slot);
+
     } else if (method == "setWaterSlot") {  // ======= setSlot
       int slot = doc["params"] | 0;
       setWaterSlotFunc(slot);
       Serial.printf("[RPC] Set water slot to: %d\n", slot);
+
     } else if (method == "getWaterBudget") {  // ====== getBudget
       int budget = getWaterBudgetFunc();
+      String response = String(budget);
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      m_mqttClient.publish(responseTopic.c_str(), String(budget).c_str());
-      Serial.printf("[RPC] Sent water budget status: %d\n", budget);
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
+      Serial.printf("[RPC] Sent water budget: %d\n", budget);
+
     } else if (method == "setWaterBudget") {  // ======= setBudget
       int budget = doc["params"] | 0;
       setWaterBudgetFunc(budget);
-      Serial.printf("[RPC] Set water baudget to: %d\n", budget);
+      Serial.printf("[RPC] Set water budget to: %d\n", budget);
+
     } else if (method == "getSystemAutoMode") {  // ====== getSystemAutoMode
       bool mode = getSystemAutoModeFunc();
-      String modeStr = mode ? "true" : "false";
+      String response = mode ? "true" : "false";
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      m_mqttClient.publish(responseTopic.c_str(), modeStr.c_str());
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
       Serial.printf("[RPC] Sent system auto mode status: %d\n", mode);
+
     } else if (method == "setSystemAutoMode") {  // ======= setSystemAutoMode
       bool mode = doc["params"] | false;
       setSystemAutoModeFunc(mode);
       Serial.printf("[RPC] Set system auto mode to: %d\n", mode);
+
     } else if (method == "getDrippersAutoMode") {  // ====== getDrippersAutoMode
       bool mode = getDrippersAutoModeFunc();
+      String response = mode ? "true" : "false";
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
-      m_mqttClient.publish(responseTopic.c_str(), String(mode).c_str());
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
       Serial.printf("[RPC] Sent drippers auto mode status: %d\n", mode);
+
     } else if (method == "setDrippersAutoMode") {  // ======= setDrippersAutoMode
       bool mode = doc["params"] | false;
       setDrippersAutoModeFunc(mode);
       Serial.printf("[RPC] Set drippers auto mode to: %d\n", mode);
+
     } else {
       Serial.println("[RPC] Unknown method.");
     }

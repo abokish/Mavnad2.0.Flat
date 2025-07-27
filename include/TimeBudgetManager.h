@@ -126,10 +126,12 @@ public:
 
 
   void printStatus(const String& label = "") const {
-    Serial.printf("[%sBudget] Slot remaining: %.2f min | Budget remaining: %.2f min | Daily used: %.2f min\n",
+    Serial.printf("[%sBudget] Slot %.2f remaining %.2f min | Budget %.0f remaining %.0f sec | Daily used: %.2f min\n",
         label.c_str(),
+        m_slotDuration / 60000.0,
         m_slotTimer / 60000.0,
-        m_budgetTimer / 60000.0,
+        m_budgetDuration / 1000.0,
+        m_budgetTimer / 1000.0,
         m_dailyUsed / 60000.0
     );
   }

@@ -7,7 +7,7 @@
 #include <DallasTemperature.h>
 #include <algorithm>
 #include "esp_task_wdt.h"
-#include "SHTManager.h"
+#include "SHTManager_I2C.h"
 #include "SHTManager_RS485.h"
 #include "TimeClient.h"
 #include "S3Log.h"
@@ -33,7 +33,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.61";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.97";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
 //const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
@@ -76,6 +76,7 @@ const int fanPins[] = {
 };
 
 float START_COOLING_DEG = 25.2;
+float START_HEATING_DEG = 18.0;
 
 // OneWire setup
 DallasManager dallas(15);
@@ -85,7 +86,7 @@ DallasManager dallas(15);
 // Define the relay pins for the air valves
 const int airValvesRelayPins[] = { PIN_DAMPER };
 
-SHTManager shtI2CManager; // For I2C sensors
+SHTManager_I2C shtI2CManager; // For I2C sensors
 HardwareSerial RS485Serial(2); // UART2
 SHTManager_RS485 shtRS485Manager(RS485Serial); // For RS485 sensors
 S3Log* dataLog;
@@ -128,33 +129,33 @@ struct ScheduleEntry {
 
 std::vector<ScheduleEntry> modeSchedule = {
   // Sunday
-  { 0,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  //{ 0,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 0,  6,  0, 19,  0, SystemMode::Cool },      
-  { 0, 22,  0, 23, 59, SystemMode::Regenerate },
+  //{ 0, 22,  0, 23, 59, SystemMode::Regenerate },
   // Monday 
-  { 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  //{ 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 1,  6,  0, 19,  0, SystemMode::Cool },      
-  { 1, 22,  0, 23, 59, SystemMode::Regenerate },
+  //{ 1, 22,  0, 23, 59, SystemMode::Regenerate },
   // Tuesday 
-  { 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  //{ 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 2,  6,  0, 19,  0, SystemMode::Cool },      
-  { 2, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  //{ 2, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Wednesday
-  { 3,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  //{ 3,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 3,  6,  0, 19,  0, SystemMode::Cool },      
-  { 3, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  //{ 3, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Thursday
-  { 4,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  //{ 4,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 4,  6,  0, 19,  0, SystemMode::Cool },      
-  { 4, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  //{ 4, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Friday
-  { 5,  0,  0,  6,  0, SystemMode::Regenerate }, 
+  //{ 5,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 5,  6,  0, 19,  0, SystemMode::Cool },      
-  { 5, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  //{ 5, 22,  0, 23, 59, SystemMode::Regenerate }, 
   // Saturday
-  { 6,  0,  0,  6,  0, SystemMode::Regenerate },
-  { 6,  6,  0, 19,  0, SystemMode::Cool },      
-  { 6, 22,  0, 23, 59, SystemMode::Regenerate } 
+  //{ 6,  0,  0,  6,  0, SystemMode::Regenerate },
+  { 6,  6,  0, 19,  0, SystemMode::Cool }      
+  //{ 6, 22,  0, 23, 59, SystemMode::Regenerate } 
   // Add more days as needed
 };
 
@@ -185,7 +186,8 @@ struct SystemModeHelper {
 DamperState damperState = DamperState::Idle;
 SystemMode currentSystemMode = SystemMode::Stop;
 AirValveMode currentAirMode = AirValveMode::Close;
-WateringMode currentWatereMode = WateringMode::Off;
+WateringMode currentWaterMode = WateringMode::Off;
+WateringMode currentDrippersMode = WateringMode::Off;
 WateringMode manualWaterMode = WateringMode::Off;
 int currentPWMSpeed = 0; // in percentage (0 - 100)
 bool debugMode = false;
@@ -193,7 +195,7 @@ unsigned long damperActionStartTime = 0;
 const unsigned long DAMPER_ACTION_DURATION_MS = 30 * 1000;
 
 void offDrippers();
-TimeBudgetManager wateringBudget(2L * 60 * 1000, 0.25L * 60 * 1000, offDrippers);
+TimeBudgetManager wateringBudget(1L * 60 * 1000, 0.25L * 60 * 1000, offDrippers);
 
 // Define a struct for relay configuration
 struct Relay {
@@ -266,7 +268,7 @@ int getSystemStatusCode() {
   status += map(currentPWMSpeed, 0, 100, 0, 3);
 
   status *= 10; // third digit - water status
-  if(currentWatereMode == WateringMode::On) status += 1;
+  if(currentWaterMode == WateringMode::On) status += 1;
 
   status *= 10; // forth digit - dampers status
   if(currentAirMode == AirValveMode::Open) status += 1;
@@ -356,23 +358,23 @@ void tickDampers() {
 
 void onSprinklers() {
   debugMessage("on sprinklers");
-  if(currentWatereMode == WateringMode::On) return;
+  if(currentWaterMode == WateringMode::On) return;
   Serial.println("[Sprinklers] on");
   
   digitalWrite(PIN_PUMP_SPRINKLERS, HIGH);
   
-  currentWatereMode = WateringMode::On;
+  currentWaterMode = WateringMode::On;
   logModeToS3(getSystemStatusCode());
 }
 
 void offSprinklers() {
   debugMessage("off sprinklers");
-  if(currentWatereMode == WateringMode::Off) return;
+  if(currentWaterMode == WateringMode::Off) return;
   Serial.println("[Sprinklers] off");
   
   digitalWrite(PIN_PUMP_SPRINKLERS, LOW);
   
-  currentWatereMode = WateringMode::Off;
+  currentWaterMode = WateringMode::Off;
   logModeToS3(getSystemStatusCode());
 }
 
@@ -387,33 +389,30 @@ void setDrippersPumpSpeed(int percent) {
 }
 
 void offDrippers() {
-  if(currentWatereMode == WateringMode::Off) return;
+  if(currentDrippersMode == WateringMode::Off) return;
   Serial.println("[Drippers] off");
 
   //digitalWrite(PIN_PUMP_DRIPPERS, LOW);
   setDrippersPumpSpeed(0);
 
-  currentWatereMode = WateringMode::Off;
+  currentDrippersMode = WateringMode::Off;
   logModeToS3(getSystemStatusCode());
 }
 
-void onDrippers(int percentage = 40) {
+void onDrippers(int percentage = 30) {
   debugMessage("on drippers");
   if (!wateringBudget.isAllowed()) {
-    // prints the message only once - the first time the water are on but not allowed. 
-    // later the current mode will be already off
-    if(currentWatereMode == WateringMode::On) Serial.println("[Drippers] Budget used up → cannot open");
     offDrippers();
     return;
   }
-  if(currentWatereMode == WateringMode::On) return;
+  if(currentDrippersMode == WateringMode::On) return;
 
   Serial.println("[Drippers] on");
 
   //digitalWrite(PIN_PUMP_DRIPPERS, HIGH);
   setDrippersPumpSpeed(percentage);
 
-  currentWatereMode = WateringMode::On;
+  currentDrippersMode = WateringMode::On;
   logModeToS3(getSystemStatusCode());
 }
 
@@ -462,7 +461,8 @@ void setWater(WateringMode mode) {
 AirValveMode getAirModeByRoom() {
   debugMessage("get air mode by room");
   AirValveMode airMode = currentAirMode;
-  float roomRH = shtI2CManager.getRoomRH();
+  float roomRH = shtRS485Manager.getRoomRH();
+  if(isnan(roomRH)) roomRH = shtI2CManager.getRoomRH();
   if(isnan(roomRH)) return airMode;
 
   if(currentAirMode == AirValveMode::Open && roomRH > 70) airMode = AirValveMode::Close;
@@ -484,20 +484,34 @@ float mapFloat(float x, float in_min, float in_max, float out_min, float out_max
 
 void onCool() {
   debugMessage("on cool");
-  float roomTemp = shtI2CManager.getRoomTemp();
-  if(isnan(roomTemp) || roomTemp < START_COOLING_DEG) return;
+  float roomTemp = shtRS485Manager.getRoomTemp();
+  if(isnan(roomTemp)) roomTemp = shtI2CManager.getRoomTemp();
+  if(isnan(roomTemp)) roomTemp = START_COOLING_DEG; // If room temperature is not available, use the default value
+  if(roomTemp < START_COOLING_DEG) return; // It's too cold to start cooling
 
+  // Select DAMPERS mode based on room temperature
   AirValveMode airMode = getAirModeByRoom();
+
+  // Select FANS speed based on room temperature
   float pwmPercentage = mapFloat(roomTemp, 25.0, 29.0, 20.0, 70.0);
   pwmPercentage = max(20.0f, min(70.0f, pwmPercentage)); // clamp the value
 
-  WateringMode wateringMode = currentWatereMode;
-  float beforeRH = shtI2CManager.getBeforeRH();
+  // Select DRIPPERS mode based on before humidity
+  float beforeRH = shtRS485Manager.getBeforeRH();
+  if(isnan(beforeRH)) beforeRH = shtI2CManager.getBeforeRH();
+  Serial.println("[Cool] Room Temp: " + String(roomTemp) + "°C, Before RH: " + String(beforeRH) + "%");
   if(!isnan(beforeRH))
-    if(beforeRH <= 80) wateringMode = WateringMode::On; 
-    else wateringMode = WateringMode::Off;
-  
-  setSystemMode(airMode, (int)pwmPercentage, wateringMode);
+    if(beforeRH < 95) currentWaterMode = WateringMode::On; 
+    else currentWaterMode = WateringMode::Off;
+
+  if(currentWaterMode == WateringMode::On) {
+    // Set the water budget - 10-40 seconds depending on fan speed 
+    float budgetTime = mapFloat(pwmPercentage, 20.0, 70.0, 10.0, 40.0);
+    Serial.printf("[onCool] Setting watering budget to %.2f seconds\n", budgetTime);
+    wateringBudget.setBudgetDurationMs(budgetTime * 1000); 
+  }
+
+  setSystemMode(airMode, (int)pwmPercentage, currentWaterMode);
 
   currentSystemMode = SystemMode::Cool;
 }
@@ -506,10 +520,11 @@ void onRegenerate() {
   debugMessage("on regenerate");
 
   // Gets water mode
-  WateringMode waterMode = currentWatereMode;
-  float beforeRh = shtI2CManager.getBeforeRH();
-  //if(currentWatereMode == WateringMode::Off && shtRS485Manager.getBeforeRH() <= 90) waterMode = WateringMode::On;
-  //if(currentWatereMode == WateringMode::On && shtRS485Manager.getBeforeRH() > 95) waterMode = WateringMode::Off;
+  WateringMode waterMode = currentWaterMode;
+  float beforeRh = shtRS485Manager.getBeforeRH();
+  if(isnan(beforeRh)) beforeRh = shtI2CManager.getBeforeRH();
+  //if(currentWaterMode == WateringMode::Off && shtRS485Manager.getBeforeRH() <= 90) waterMode = WateringMode::On;
+  //if(currentWaterMode == WateringMode::On && shtRS485Manager.getBeforeRH() > 95) waterMode = WateringMode::Off;
   if(!isnan(beforeRh))
     if(beforeRh <= 95) waterMode = WateringMode::On;
     else waterMode = WateringMode::Off;
@@ -530,33 +545,47 @@ void onHeat() {
 // ========== update mode =============
 SystemMode lastSelectedMode = SystemMode::Stop;
 void updateSystemMode() {
-  if(currentSystemMode == SystemMode::Manual) {
-    if(manualWaterMode == WateringMode::On) onDrippers();
-    return;
-  }
-
-  // gets current time
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("[Time] Failed to get local time");
-    return;
-  }
-
-  uint8_t dow = timeinfo.tm_wday; // 0 = Sunday
-  uint16_t currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
+  if(currentSystemMode == SystemMode::Manual) return; // Manual mode is not controlled by schedule
 
   SystemMode newMode = SystemMode::Stop;
+  
+  // Gets the room temperature
+  float roomTemp = shtRS485Manager.getRoomTemp();
+  if(isnan(roomTemp)) roomTemp = shtI2CManager.getRoomTemp();
+  if(isnan(roomTemp)) roomTemp = shtRS485Manager.getAfterTemp(); // room and after are very similar
+  if(isnan(roomTemp)) roomTemp = shtI2CManager.getAfterTemp();
 
-  // looking for current time schedualing entry
-  for (const auto& entry : modeSchedule) {
-    if (entry.dayOfWeek != dow) continue;
+  if(isnan(roomTemp)) { // if no sensor is available, check for time entry
+    // gets current time
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+     Serial.println("[Time] Failed to get local time");
+     return;
+    }
 
-    uint16_t start = entry.startHour * 60 + entry.startMin;
-    uint16_t end   = entry.endHour   * 60 + entry.endMin;
+    uint8_t dow = timeinfo.tm_wday; // 0 = Sunday
+    uint16_t currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
 
-    if (currentMinutes >= start && currentMinutes < end) {
-      newMode = entry.mode;
-      break; // Stop at first match
+    // looking for current time schedualing entry
+    for (const auto& entry : modeSchedule) {
+     if (entry.dayOfWeek != dow) continue;
+
+     uint16_t start = entry.startHour * 60 + entry.startMin;
+     uint16_t end   = entry.endHour   * 60 + entry.endMin;
+
+     if (currentMinutes >= start && currentMinutes < end) {
+       newMode = entry.mode;
+       break; // Stop at first match
+     }
+    }
+  }
+  else { // we got the room temperature, so we can decide based on it
+    if(roomTemp >= START_COOLING_DEG) {
+      newMode = SystemMode::Cool;
+    } else if(roomTemp <= START_HEATING_DEG) {
+      newMode = SystemMode::Heat;
+    } else {
+      newMode = SystemMode::Stop; // If temperature is in between, stop the system
     }
   }
 
@@ -585,16 +614,26 @@ void updateSystemMode() {
   }
 }
 
-bool systemUpdated = false;
-void tick() {
-  wateringBudget.tick(currentWatereMode == WateringMode::On); // (digitalRead(PIN_PUMP_DRIPPERS));
-  tickDampers();
+void tickDrippers() {
+  wateringBudget.tick(currentDrippersMode == WateringMode::On); // tick the budget only if water is on
 
-  //int currMin = timeClient->getMinute();
-  //if(currMin % 5 == 0 && systemUpdated == false) {
+  if(currentWaterMode == WateringMode::On) {
+    onDrippers();
+  }
+}
+
+unsigned long lastSystemUpdate = 0;
+
+void tick() {
+  tickDampers();
+  tickDrippers();
+
+  // Update the system mode every 5 minutes
+  unsigned long now = millis();
+  if (now - lastSystemUpdate >= 5 * 60 * 1000) { // 5 minutes in ms
     updateSystemMode();
-  //  systemUpdated = true;
-  //}
+    lastSystemUpdate = now;
+  }
 }
 
 String timeToString(struct tm timeInfo) {
@@ -618,9 +657,9 @@ void PrintSensors(){
               getSystemStatusCode(),
               SystemModeHelper::toString(currentSystemMode).c_str(),
               currentPWMSpeed,
-              currentWatereMode == WateringMode::On ? "Open" : "Close",
+              currentWaterMode == WateringMode::On ? "Open" : "Close",
               currentAirMode == AirValveMode::Open ? "Open" : "Close");
-  wateringBudget.printStatus("Watering");
+  wateringBudget.printStatus("Drippers");
 
   // I2C SHT31 sensors
   Serial.println("I2C SHT31 sensors:");
@@ -708,14 +747,41 @@ void PrintPartitions() {
 void sendTelemetry() {
   // ThingsBoard server
   // RS485 SHT31 sensors
-  otaManager.sendTelemetry("RS485_Ambiant_Temp", FloatValidityCheck(shtRS485Manager.getAmbiantTemp()));
-  otaManager.sendTelemetry("RS485_Ambiant_RH", FloatValidityCheck(shtRS485Manager.getAmbiantRH()));
-  otaManager.sendTelemetry("RS485_Before_Temp", FloatValidityCheck(shtRS485Manager.getBeforeTemp()));
-  otaManager.sendTelemetry("RS485_Before_RH", FloatValidityCheck(shtRS485Manager.getBeforeRH()));
-  otaManager.sendTelemetry("RS485_After_Temp", FloatValidityCheck(shtRS485Manager.getAfterTemp()));
-  otaManager.sendTelemetry("RS485_After_RH", FloatValidityCheck(shtRS485Manager.getAfterRH()));
-  otaManager.sendTelemetry("RS485_Room_Temp", FloatValidityCheck(shtRS485Manager.getRoomTemp()));
-  otaManager.sendTelemetry("RS485_Room_RH", FloatValidityCheck(shtRS485Manager.getRoomRH()));
+  float val;
+  val = shtRS485Manager.getAmbiantTemp(); if (!isnan(val)) {
+    otaManager.sendTelemetry("RS485_Ambiant_Temp", val);
+    logToS3("RS485_Ambiant_Temp", "SHT31", "deg_c", val);
+  }
+  val = shtRS485Manager.getAmbiantRH();   if (!isnan(val)) {
+    otaManager.sendTelemetry("RS485_Ambiant_RH", val);
+    logToS3("RS485_Ambiant_RH", "SHT31", "rh", val);
+  }
+  val = shtRS485Manager.getBeforeTemp();  if (!isnan(val)) {
+    otaManager.sendTelemetry("RS485_Before_Temp", val);
+    logToS3("RS485_Before_Temp", "SHT31", "deg_c", val);
+  }
+  val = shtRS485Manager.getBeforeRH();    if (!isnan(val)) {
+    otaManager.sendTelemetry("RS485_Before_RH", val);
+    logToS3("RS485_Before_RH", "SHT31", "rh", val);
+  }
+  val = shtRS485Manager.getAfterTemp();   if (!isnan(val)) {
+    otaManager.sendTelemetry("RS485_After_Temp", val);
+    logToS3("RS485_After_Temp", "SHT31", "deg_c", val);
+  }
+  val = shtRS485Manager.getAfterRH();     if (!isnan(val)) {
+    otaManager.sendTelemetry("RS485_After_RH", val);
+    logToS3("RS485_After_RH", "SHT31", "rh", val);
+  }
+
+  // Room temperature and humidity
+  val = shtRS485Manager.getRoomTemp();    if (!isnan(val)) {
+    otaManager.sendTelemetry("RS485_Room_Temp", val);
+    logToS3("RS485_Room_Temp", "SHT31", "deg_c", val);
+  }
+  val = shtRS485Manager.getRoomRH();      if (!isnan(val)) {
+    otaManager.sendTelemetry("RS485_Room_RH", val);
+    logToS3("RS485_Room_RH", "SHT31", "rh", val);
+  }
 
   // I2C SHT31 sensors
   otaManager.sendTelemetry("I2C_Ambiant_Temp", FloatValidityCheck(shtI2CManager.getAmbiantTemp()));
@@ -728,25 +794,29 @@ void sendTelemetry() {
   otaManager.sendTelemetry("I2C_Room_RH", FloatValidityCheck(shtI2CManager.getRoomRH()));
   
   // Dallas sensors
-  otaManager.sendTelemetry("I2C_In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
-  otaManager.sendTelemetry("I2C_Roof_Top_Temp", FloatValidityCheck(dallas.getTemperature("roof_top")));
-  
-  // System status
-  otaManager.sendTelemetry("System_Status", getSystemStatusCode());
+  otaManager.sendTelemetry("In_Wall_Temp", FloatValidityCheck(dallas.getTemperature("in_wall")));
+  otaManager.sendTelemetry("Roof_Top_Temp", FloatValidityCheck(dallas.getTemperature("roof_top")));
 
+  // Send the system status code
+  // The code is a 4 digit number:
+  // First digit is the system mode: 1 = cooling; 2 = heating; 3 = regenerating; 0 = off
+  // Second digit is fans speed: 1 = low; 2 = medium; 3 = high speed; 0 = fans are closed
+  // Third digit is the water status: 1 = open; 0 = close
+  // Fourth digit is the dampers status: 1 = open; 0 = close
+  // The sign (negative or positive number) is: > = outtake; < 0 = intake (reverse)
+  // Example: 1234 means: cooling mode, fans at medium speed, water is open, dampers are open, and the fans are outtake (positive number).
+  // Example: -1234 means: cooling mode, fans at medium speed, water is open, dampers are open, and the fans are intake (reverse).
+  // The code is sent as a string, so it can be easily parsed by the server.
+  // The code is also logged to S3 for long-term storage.
+  otaManager.sendTelemetry("System_Status", String(getSystemStatusCode()));
+  logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // mode data must be in location "cooler"
+  
+  // Send the current time
+  otaManager.sendTelemetry("Current_Time", timeClient->getFormattedTime());
+  
   delay(300);
 
   // S3 server
-  // RS485 SHT31 sensors
-  logToS3("RS485After", "SHT31", "deg_c", FloatValidityCheck(shtRS485Manager.getAfterTemp())); 
-  logToS3("RS485After", "SHT31", "rh", FloatValidityCheck(shtRS485Manager.getAfterRH()));
-  logToS3("RS485Before", "SHT31", "deg_c", FloatValidityCheck(shtRS485Manager.getBeforeTemp())); 
-  logToS3("RS485Before", "SHT31", "rh", FloatValidityCheck(shtRS485Manager.getBeforeRH()));
-  logToS3("RS485Room", "SHT31", "deg_c", FloatValidityCheck(shtRS485Manager.getRoomTemp())); 
-  logToS3("RS485Room", "SHT31", "rh", FloatValidityCheck(shtRS485Manager.getRoomRH()));
-  logToS3("RS485Ambiant", "SHT31", "deg_c", FloatValidityCheck(shtRS485Manager.getAmbiantTemp())); 
-  logToS3("RS485Ambiant", "SHT31", "rh", FloatValidityCheck(shtRS485Manager.getAmbiantRH()));
-  
   // I2C SHT31 sensors
   logToS3("I2CAmbiant", "SHT31", "deg_c", FloatValidityCheck(shtI2CManager.getAmbiantTemp())); 
   logToS3("I2CAmbiant", "SHT31", "rh", FloatValidityCheck(shtI2CManager.getAmbiantRH()));
@@ -760,9 +830,6 @@ void sendTelemetry() {
   // Dallas sensors
   logToS3("In_Wall", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("in_wall"))); 
   logToS3("Roof_Top", "DS180B20", "deg_c", FloatValidityCheck(dallas.getTemperature("roof_top"))); 
-
-  // System status
-  logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // mode data must be in location "cooler"
 
   delay(300);
   dataLog->uploadDataFile(SITE_NAME, BUILDING_NAME, "Mavnad1");
@@ -787,7 +854,7 @@ void setDampersStatus(bool isOpen) {
 }
 
 bool getSolenoidStatus() {
-  return currentWatereMode == WateringMode::On;
+  return currentWaterMode == WateringMode::On;
 }
 
 void setSolenoidStatus(bool status) {
@@ -796,23 +863,23 @@ void setSolenoidStatus(bool status) {
 }
 
 int getWaterSlot() { // minutes
-  return wateringBudget.getSlotDurationMs() / 1000 / 60;
+  return (int)(wateringBudget.getSlotDurationMs() / 1000 / 60);
 }
 
 void setWaterSlot(int duration) {
   currentSystemMode = SystemMode::Manual;
-  wateringBudget.setSlotDurationMs(duration * 60 * 1000);
   manualWaterMode = WateringMode::On;
+  wateringBudget.setSlotDurationMs(duration * 60 * 1000);
 }
 
 int getWaterBudget() { // seconds
-  return wateringBudget.getBudgetDurationMs() / 1000;
+  return (int)(wateringBudget.getBudgetDurationMs() / 1000);
 }
 
 void setWaterBudget(int duration) {
   currentSystemMode = SystemMode::Manual;
-  wateringBudget.setBudgetDurationMs(duration * 1000);
   manualWaterMode = WateringMode::On;
+  wateringBudget.setBudgetDurationMs(duration * 1000);
 }
 
 bool getSystemAutoMode() {
@@ -824,9 +891,9 @@ void setSystemAutoMode(bool autoMode) {
   currentSystemMode = autoMode ? SystemMode::Stop : SystemMode::Manual;
 }
 
-bool getDrippersAutoMode(bool autoMode) {
+bool getDrippersAutoMode() {
   // any mode that is not Manual is auto
-  return manualWaterMode;
+  return manualWaterMode == WateringMode::Off; // if manual mode is off, then it is auto mode
 }
 
 void setDrippersAutoMode(bool autoMode) {
@@ -890,17 +957,18 @@ void setup() {
 
   // I2C SHT sensors manager
   Serial.println("[setup] SHT I2C sensors manager:");
-  shtI2CManager.setupShtSensors();
+  shtI2CManager.begin();
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
 
   // Setup SHT sensors manager
   Serial.println("[setup] SHT RS485 sensors manager:");
-  shtRS485Manager.setSensorAddr(SHTManager_RS485::AMBIANT, 1);
-  shtRS485Manager.setSensorAddr(SHTManager_RS485::BEFORE, 2);
+  shtRS485Manager.setSensorAddr(SHTManager_RS485::AMBIANT, 4);
+  shtRS485Manager.setSensorAddr(SHTManager_RS485::BEFORE, 5);
   shtRS485Manager.setSensorAddr(SHTManager_RS485::AFTER, 3);
-  shtRS485Manager.setSensorAddr(SHTManager_RS485::ROOM, 4);
+  shtRS485Manager.setSensorAddr(SHTManager_RS485::ROOM, 1);
+  shtRS485Manager.setSensorAddr(SHTManager_RS485::ROOF, 2);
   shtRS485Manager.begin(4800);
 
   // I'm still alive - Reset watchdog to prevent timeout
@@ -947,14 +1015,16 @@ void setup() {
   otaManager.setWaterBudgetFunc = setWaterBudget;
   otaManager.getSystemAutoModeFunc = getSystemAutoMode;
   otaManager.setSystemAutoModeFunc = setSystemAutoMode;
+  otaManager.getDrippersAutoModeFunc = getDrippersAutoMode;
+  otaManager.setDrippersAutoModeFunc = setDrippersAutoMode;
 
   Serial.println("[setup] setup done successfuly!");
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
 
-  PrintSensors();
   updateSystemMode();
+  PrintSensors();
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
@@ -966,13 +1036,17 @@ void setup() {
 bool is2Minute = false;
 void loop() {
   otaManager.tick();
+  shtI2CManager.tick();
+  shtRS485Manager.tick();
   tick();
 
   // Every 2 minutes
   if((timeClient->getMinute() % 2) == 0) {
     if(!is2Minute) {
       is2Minute = true;
+      esp_task_wdt_reset(); // I'm still alive - Reset watchdog to prevent timeout
       PrintSensors();
+      esp_task_wdt_reset(); // I'm still alive - Reset watchdog to prevent timeout
     }
   } else {
     is2Minute = false;
@@ -999,8 +1073,7 @@ void loop() {
 
   HandleManualControl();
 
-  // I'm still alive - Reset watchdog to prevent timeout
-  esp_task_wdt_reset();
+  esp_task_wdt_reset(); // I'm still alive - Reset watchdog to prevent timeout
 }
 
 // ==============================================================================
