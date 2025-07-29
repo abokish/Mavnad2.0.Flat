@@ -31,7 +31,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.106";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.108";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
 //const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
@@ -888,7 +888,15 @@ bool getSystemAutoMode() {
 }
 
 void setSystemAutoMode(bool autoMode) {
-  currentSystemMode = autoMode ? SystemMode::Stop : SystemMode::Manual;
+  if(autoMode) {
+    // turn off manual mode
+    manualWaterMode = WateringMode::Off; 
+    currentSystemMode = SystemMode::Stop; // turn off system mode
+    updateSystemMode(); // update the system mode based on the current environment parameters
+  } else {
+    // turn on manual mode
+    currentSystemMode = SystemMode::Manual; // turn on system mode
+  }
 }
 
 bool getDrippersAutoMode() {
@@ -1044,7 +1052,7 @@ void setup() {
   dataLog = new S3Log("/log.txt", timeClient);
 
   Serial.println("[Setup] Initializing ThingsBoard");
-  otaManager.begin();
+  otaManager.setBeforeFirmwareUpdateCallback(off);
   otaManager.getFanSpeedFunc = getFanSpeed;
   otaManager.setFanSpeedFunc = setFanSpeed;
   otaManager.getDampersStatusFunc = getDampersStatus;
@@ -1059,6 +1067,7 @@ void setup() {
   otaManager.setSystemAutoModeFunc = setSystemAutoMode;
   otaManager.getDrippersAutoModeFunc = getDrippersAutoMode;
   otaManager.setDrippersAutoModeFunc = setDrippersAutoMode;
+  otaManager.begin();
 
   Serial.println("[setup] setup done successfuly!");
 

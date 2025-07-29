@@ -240,6 +240,8 @@ public:
         String fwURL = shared["fw_url"] | "";
         size_t fwSize = shared["fw_size"] | 0;
 
+        triggerBeforeFirmwareUpdate(); // Call the callback before firmware update
+
         Serial.printf("[OTA] New firmware %s version %s. Downloading...\n", fwTitle.c_str(), fwVersion.c_str());
         downloadFirmware(fwURL, fwSize, fwChecksum, fwTitle, fwVersion);
       } else {
@@ -479,6 +481,10 @@ public:
     m_mqttClient.publish("v1/devices/me/telemetry", payload.c_str());
   }
 
+  void setBeforeFirmwareUpdateCallback(std::function<void()> callback) {
+    onBeforeFirmwareUpdate = callback;
+  }
+
 private:
   PubSubClient &m_mqttClient;
   String m_fwVersion;
@@ -486,6 +492,16 @@ private:
 
   unsigned long lastMqttAttempt = 0;
   const unsigned long mqttReconnectInterval = 5000;
+
+  std::function<void()> onBeforeFirmwareUpdate = nullptr;
+  void triggerBeforeFirmwareUpdate() {
+    if (onBeforeFirmwareUpdate) {
+      Serial.println("[OTA] Triggering safe shutdown before firmware update...");
+      onBeforeFirmwareUpdate();
+    } else {
+      Serial.println("[OTA] No callback set for before firmware update.");
+    }
+  }
 
   const char* thingsboard_root_ca_cert = \
 "-----BEGIN CERTIFICATE-----\n"
