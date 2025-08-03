@@ -467,7 +467,7 @@ public:
     String payload;
     serializeJson(doc, payload);
 
-    Serial.printf("[OTA-Telemetry] Publishing: %s\n", payload.c_str());
+    //Serial.printf("[OTA-Telemetry] Publishing: %s\n", payload.c_str());
     m_mqttClient.publish("v1/devices/me/telemetry", payload.c_str());
   }
 
@@ -477,8 +477,37 @@ public:
 
     String payload;
     serializeJson(doc, payload);
-    Serial.printf("[OTA-Telemetry] Batch: %s\n", payload.c_str());
+    //Serial.printf("[OTA-Telemetry] Batch: %s\n", payload.c_str());
     m_mqttClient.publish("v1/devices/me/telemetry", payload.c_str());
+  }
+
+  void sendAttribute(const String& key, const String& value) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("[OTA-Attr] WiFi not connected. Skipping attribute.");
+      return;
+    }
+    if (!m_mqttClient.connected()) {
+      Serial.println("[OTA-Attr] MQTT not connected. Skipping attribute.");
+      return;
+    }
+
+    StaticJsonDocument<256> doc;
+    doc[key] = value;
+    String payload;
+    serializeJson(doc, payload);
+
+    //Serial.printf("[OTA-Attr] Publishing attribute: %s\n", payload.c_str());
+    m_mqttClient.publish("v1/devices/me/attributes", payload.c_str());
+  }
+
+  // Wrapper for float
+  void sendAttribute(const String& key, float value) {
+    sendAttribute(key, String(value, 2)); // 2 decimal places
+  }
+
+  // Wrapper for int
+  void sendAttribute(const String& key, int value) {
+    sendAttribute(key, String(value));
   }
 
   void setBeforeFirmwareUpdateCallback(std::function<void()> callback) {

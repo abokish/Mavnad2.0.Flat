@@ -18,9 +18,9 @@
 // Wifi credentials
 // ===========================
 const char* WIFI_SSID = "ThermoTera";
-// const char* WIFI_SSID = "The Goldenberg’s";
+//const char* WIFI_SSID = "BokishHome";
 const char* WIFI_PASSWORD = "Thermo2007";
-// const char* WIFI_PASSWORD = "0523089060";
+//const char* WIFI_PASSWORD = "ShalomShalom";
 
 // Timezone offset for GMT+3
 const long gmtOffset_sec = 3 * 3600; // 3 hours in seconds
@@ -31,7 +31,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.108";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.112";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
 //const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
@@ -56,7 +56,7 @@ const int FAN_RESOLUTION = 8;  // 8-bit resolution (0-255)
 const int PIN_PUMP_DRIPPERS = 13;
 const int PIN_DAMPER = 12;
 const int PIN_DAMPER_POWER = 11;
-const int PIN_PUMP_SPRINKLERS = 10;
+const int PIN_PUMP_SPRINKLERS = 3; //10;
 
 const int PUMP_PWM_CHANNEL = 1;
 const int PUMP_PWM_FREQ = 1000;     // 1 kHz (safe value within 100–2000 Hz)
@@ -280,10 +280,17 @@ void logModeToS3(float value) {
     logToS3("System", "system", "cooler", "mode", value); // "mode" must be in location "cooler"
 }
 
+void logMessage(const String& msg) {
+  Serial.println(msg);
+  otaManager.sendTelemetry("log", msg);
+}
+
+
 void onFans(int percentage = 70) {
   if(currentPWMSpeed == percentage) return;
 
-  Serial.printf("[Fans] current pwm = %i; new = %i\n", currentPWMSpeed, percentage);
+  String message = "[Fans] current pwm = " + (String)currentPWMSpeed + "; new = " + (String)percentage + "\n";
+  logMessage(message);
   int duty = map(percentage, 0, 100, 0, 255);
   ledcWrite(FAN_CHANNEL, duty);
   currentPWMSpeed = percentage;
@@ -293,7 +300,7 @@ void onFans(int percentage = 70) {
 void offFans() {
   debugMessage("off fans");
   if(currentPWMSpeed == 0) return;
-  Serial.println("[Fans] off");
+  logMessage("[Fans] off");
   ledcWrite(FAN_CHANNEL, 0);
   currentPWMSpeed = 0;
   logModeToS3(getSystemStatusCode());
@@ -304,7 +311,7 @@ void onDampers() {
   if(currentAirMode == AirValveMode::Open) return;
   if (damperState  != DamperState::Idle) return; // Already busy
 
-  Serial.println("[Dampers] open start");
+  logMessage("[Dampers] open start");
 
   digitalWrite(PIN_DAMPER_POWER, HIGH);
   delay(100);
@@ -319,7 +326,7 @@ void offDampers(bool forceClose = false) {
   if(!forceClose && currentAirMode == AirValveMode::Close) return;
   if (damperState  != DamperState::Idle) return; // busy
 
-  Serial.println("[Dampers] close start");
+  logMessage("[Dampers] close start");
 
   digitalWrite(PIN_DAMPER_POWER, HIGH);
   damperActionStartTime = millis();
@@ -342,10 +349,10 @@ void tickDampers() {
       delay(10);
       digitalWrite(PIN_DAMPER, LOW);
       currentAirMode = AirValveMode::Open;
-      Serial.println("[Dampers] open complete");
+      logMessage("[Dampers] open complete");
     } else if (damperState == DamperState::Closing) {
       currentAirMode = AirValveMode::Close;
-      Serial.println("[Dampers] close complete");
+      logMessage("[Dampers] close complete");
     }
 
     damperState = DamperState::Idle;
@@ -356,7 +363,7 @@ void tickDampers() {
 void offSprinklers() {
   debugMessage("off sprinklers");
   if(currentSprinklersMode != WateringMode::Off) 
-    Serial.println("[Sprinklers] off"); // printing only once, when changing state from on to off
+    logMessage("[Sprinklers] off"); // printing only once, when changing state from on to off
   
   digitalWrite(PIN_PUMP_SPRINKLERS, LOW);
   
@@ -365,19 +372,19 @@ void offSprinklers() {
 }
 
 void onSprinklers() {
-  debugMessage("on sprinklers");
-  if (!sprinklersBudget.isAllowed()) {
-    offSprinklers();
-    return;
-  }
+  // debugMessage("on sprinklers");
+  // if (!sprinklersBudget.isAllowed()) {
+  //   offSprinklers();
+  //   return;
+  // }
 
-  if(currentSprinklersMode == WateringMode::On) return;
-  Serial.println("[Sprinklers] on");
+  // if(currentSprinklersMode == WateringMode::On) return;
+  // logMessage("[Sprinklers] on");
   
-  digitalWrite(PIN_PUMP_SPRINKLERS, HIGH);
+  // digitalWrite(PIN_PUMP_SPRINKLERS, HIGH);
   
-  currentSprinklersMode = WateringMode::On;
-  logModeToS3(getSystemStatusCode());
+  // currentSprinklersMode = WateringMode::On;
+  // logModeToS3(getSystemStatusCode());
 }
 
 void setDrippersPumpSpeed(int percent) {
@@ -392,7 +399,7 @@ void setDrippersPumpSpeed(int percent) {
 
 void offDrippers() {
   if(currentDrippersMode == WateringMode::Off) return;
-  Serial.println("[Drippers] off");
+  logMessage("[Drippers] off");
 
   //digitalWrite(PIN_PUMP_DRIPPERS, LOW);
   setDrippersPumpSpeed(0);
@@ -409,7 +416,7 @@ void onDrippers(int percentage = 30) {
   }
   if(currentDrippersMode == WateringMode::On) return;
 
-  Serial.println("[Drippers] on");
+  logMessage("[Drippers] on");
 
   //digitalWrite(PIN_PUMP_DRIPPERS, HIGH);
   setDrippersPumpSpeed(percentage);
@@ -486,7 +493,8 @@ void setWaterBudgetFromPwm(int pwm) {
   // Set the watering budget based on the fan speed
   // The budget is set to 10-40 seconds depending on the fan speed
   float budgetTime = mapFloat(pwm, 20.0, 70.0, 10.0, 40.0);
-  Serial.printf("[setWaterBudgetFromPwm] Setting watering budget to %.2f seconds\n", budgetTime);
+  String message = "[setWaterBudgetFromPwm] Setting watering budget to " + (String)budgetTime + " seconds\n";
+  logMessage(message);
   wateringBudget.setBudgetDurationMs(budgetTime * 1000);
 }
 
@@ -507,7 +515,7 @@ void onCool() {
   float beforeRH = shtRS485Manager.getBeforeRH();
   Serial.println("[Cool] Room Temp: " + String(roomTemp) + "°C, Before RH: " + String(beforeRH) + "%");
   if(!isnan(beforeRH))
-    if(beforeRH < 95) currentWaterMode = WateringMode::On; 
+    if(beforeRH < 92) currentWaterMode = WateringMode::On; 
     else currentWaterMode = WateringMode::Off;
 
   if(currentWaterMode == WateringMode::On) {
@@ -541,7 +549,7 @@ void onRegenerate() {
 }
 
 void onHeat() {
-  Serial.println("on heat");
+  logMessage("[onHeat] on");
   Serial.println("Heat mode is not supported yet");
 }
 
@@ -560,7 +568,7 @@ void updateSystemMode() {
     // gets current time
     struct tm timeinfo;
     if (!getLocalTime(&timeinfo)) {
-     Serial.println("[Time] Failed to get local time");
+     logMessage("[UpdateSystemMode] Failed to get local time");
      return;
     }
 
@@ -593,7 +601,8 @@ void updateSystemMode() {
   if (newMode != currentSystemMode && lastSelectedMode != newMode) {
     // lastSelectedMode is just to make sure i print this only once
     lastSelectedMode = newMode;
-    Serial.printf("[System] Mode changed to %s\n", SystemModeHelper::toString(newMode).c_str());
+    String message = "[System] Mode changed to " + SystemModeHelper::toString(newMode) + "\n";
+    logMessage(message);
   }
 
   float beforeRH = NAN;
@@ -688,16 +697,18 @@ String timeToString(struct tm timeInfo) {
 
 void PrintSensors(){
   Serial.println("--------------------------------------------");
-  Serial.println("Ver: " + CURRENT_FIRMWARE_VERSION);
+  logMessage("Ver: " + CURRENT_FIRMWARE_VERSION);
   struct tm localTime;
   if(getLocalTime(&localTime)) Serial.println(timeToString(localTime));
-  Serial.printf("System mode code %i: Mode = % s; PWM = %i; Drippers = %s; Sprinklers = %s; Dampers = %s\n", 
-              getSystemStatusCode(),
-              SystemModeHelper::toString(currentSystemMode).c_str(),
-              currentPWMSpeed,
-              currentWaterMode == WateringMode::On ? "Open" : "Close",
-              desiredSprinklersMode == WateringMode::On ? "Open" : "Close",
-              currentAirMode == AirValveMode::Open ? "Open" : "Close");
+  String message = "System mode code " + (String)getSystemStatusCode() +
+                   "; Mode = " + SystemModeHelper::toString(currentSystemMode) +
+                    "; PWM = " + (String)currentPWMSpeed +
+                    "; Drippers Mode = " + (currentWaterMode == WateringMode::On ? "Open" : "Close") +
+                    "; Drippers Actual = " + (currentDrippersMode == WateringMode::On ? "Open" : "Close") +
+                    "; Sprinklers Mode = " + (desiredSprinklersMode == WateringMode::On ? "Open" : "Close") +
+                    "; Sprinklers Actual = " + (currentSprinklersMode == WateringMode::On ? "Open" : "Close") +
+                    "; Dampers = " + (currentAirMode == AirValveMode::Open ? "Open" : "Close");
+  logMessage(message);
   wateringBudget.printStatus("Drippers");
   sprinklersBudget.printStatus("Sprinklers");
 
@@ -726,9 +737,9 @@ void setupWiFi(unsigned long timeoutMs = 10000) {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("\n[WiFi] Connected.");
+        logMessage("[WiFi] Connected.");
     } else {
-        Serial.println("\n[WiFi] Failed to connect. Continuing in offline mode.");
+        logMessage("[WiFi] Failed to connect. Continuing in offline mode.");
         // Optionally disable WiFi to save power
         WiFi.mode(WIFI_OFF);
     }
@@ -738,7 +749,7 @@ void setupWiFi(unsigned long timeoutMs = 10000) {
 // RTC will get the current time from the net
 struct tm SetupTime() {
     configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.nist.gov");
-    Serial.println("NTP configured");
+    logMessage("NTP configured");
 
     struct tm timeinfo;
     const int maxRetries = 10;  // Try for 10 seconds max
@@ -751,7 +762,7 @@ struct tm SetupTime() {
     }
 
     if (retries >= maxRetries) {
-        Serial.println("ERROR: Unable to set time from NTP. Using default time or RTC fallback.");
+        logMessage("ERROR: Unable to set time from NTP. Using default time or RTC fallback.");
         // Optional: you could set default values in timeinfo or handle it gracefully.
     } else {
         Serial.println("Time successfully set!");
@@ -933,7 +944,7 @@ void setup() {
   Serial.printf("[Setup] Firmware version: %s\n", CURRENT_FIRMWARE_VERSION);
 
   // Relays
-  Serial.println("[setup] set relays");
+  logMessage("[setup] set relays");
   pinMode(PIN_DAMPER, OUTPUT);
   pinMode(PIN_DAMPER_POWER, OUTPUT);
   pinMode(PIN_PUMP_SPRINKLERS, OUTPUT);
@@ -952,7 +963,7 @@ void setup() {
   offDampers(true);
 
   // Mosfet
-  Serial.println("[setup] set mosfets");
+  logMessage("[setup] set mosfets");
   ledcSetup(FAN_CHANNEL, FAN_FREQUENCY, FAN_RESOLUTION);
   for(const auto& fan : fanPins) {
     pinMode(fan, OUTPUT);
@@ -964,7 +975,7 @@ void setup() {
   esp_task_wdt_reset();
 
   // Setup SHT sensors manager
-  Serial.println("[setup] SHT RS485 sensors manager:");
+  logMessage("[setup] SHT RS485 sensors manager:");
   shtRS485Manager.setSensorAddr(SHTManager_RS485::AMBIANT, 4);
   shtRS485Manager.setSensorAddr(SHTManager_RS485::BEFORE, 5);
   shtRS485Manager.setSensorAddr(SHTManager_RS485::AFTER, 3);
@@ -979,9 +990,9 @@ void setup() {
   setupWiFi();
   if(WiFi.status() == WL_CONNECTED) {
     int32_t rssi = WiFi.RSSI();
-    Serial.printf("[WiFi] Current signal strength (RSSI): %dBm\n", rssi);
+    String message = "[WiFi] Current signal strength (RSSI): " + (String)rssi + "Bm";
     if (rssi < -70) {
-      Serial.println("[WiFI] Warning: Weak WiFi signal detected. Consider moving closer to the router.");
+      logMessage("[WiFI] Warning: Weak WiFi signal detected. Consider moving closer to the router.");
     } else {
       Serial.println("[WiFi] WiFi signal strength is good.");
     }
@@ -1001,9 +1012,9 @@ void setup() {
   Wire1.begin(7, 6);  // Use secondary I2C bus
   bool rtcReady = rtc.begin(&Wire1);
   if (!rtcReady) {
-    Serial.println("[RTC] Failed to initialize RTC — will use NTP only if available.");
+    logMessage("[RTC] Failed to initialize RTC — will use NTP only if available.");
   } else {
-    Serial.println("[RTC] RTC initialized successfully.");
+    logMessage("[RTC] RTC initialized successfully.");
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // Optional: Set compile-time as fallback base
   }
 
@@ -1018,7 +1029,7 @@ void setup() {
       Serial.println("[RTC] RTC updated from NTP.");
     }
   } else {
-    Serial.println("[Time] NTP unavailable. Trying to get time from RTC...");
+    logMessage("[Time] NTP unavailable. Trying to get time from RTC...");
 
     // Step 4: Fallback to RTC if NTP fails
     if (rtcReady) {
@@ -1038,10 +1049,10 @@ void setup() {
         .tv_usec = 0
       };
       settimeofday(&tv, nullptr);
-      Serial.println("[Time] System time restored from RTC.");
+      logMessage("[Time] System time restored from RTC.");
       Serial.println(timeToString(timeInfo));
     } else {
-      Serial.println("[RTC] Failed to read time from RTC as well. Using default or previous time.");
+      logMessage("[RTC] Failed to read time from RTC as well. Using default or previous time.");
     }
   }
 
@@ -1051,7 +1062,7 @@ void setup() {
   Serial.print("[Setup] Initializing S3Log ");
   dataLog = new S3Log("/log.txt", timeClient);
 
-  Serial.println("[Setup] Initializing ThingsBoard");
+  logMessage("[Setup] Initializing ThingsBoard");
   otaManager.setBeforeFirmwareUpdateCallback(off);
   otaManager.getFanSpeedFunc = getFanSpeed;
   otaManager.setFanSpeedFunc = setFanSpeed;
@@ -1068,8 +1079,9 @@ void setup() {
   otaManager.getDrippersAutoModeFunc = getDrippersAutoMode;
   otaManager.setDrippersAutoModeFunc = setDrippersAutoMode;
   otaManager.begin();
+  otaManager.sendAttribute("fw_version_actual", CURRENT_FIRMWARE_VERSION);
 
-  Serial.println("[setup] setup done successfuly!");
+  logMessage("[setup] setup done successfuly!");
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
