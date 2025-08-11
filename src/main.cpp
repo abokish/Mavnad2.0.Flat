@@ -31,7 +31,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.116";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.126";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
 //const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
@@ -187,7 +187,7 @@ int currentPWMSpeed = 0; // in percentage (0 - 100)
 float lastAfterHumidity = NAN; // Last valid humidity reading
 bool debugMode = false;
 unsigned long damperActionStartTime = 0;
-const unsigned long DAMPER_ACTION_DURATION_MS = 30 * 1000;
+const unsigned long DAMPER_ACTION_DURATION_MS = 15 * 1000;
 RTC_DS3231 rtc;
 
 void offDrippers();
@@ -276,15 +276,24 @@ int getSystemStatusCode() {
   return status;
 }
 
-void logModeToS3(float value) {
-    logToS3("System", "system", "cooler", "mode", value); // "mode" must be in location "cooler"
-}
-
 void logMessage(const String& msg) {
   Serial.println(msg);
   otaManager.sendTelemetry("log", msg);
 }
 
+void logModeToS3(float value) {
+    logToS3("System", "system", "cooler", "mode", value); // "mode" must be in location "cooler"
+
+    String message = "System mode code " + (String)getSystemStatusCode() +
+                   "; Mode = " + SystemModeHelper::toString(currentSystemMode) +
+                    "; PWM = " + (String)currentPWMSpeed +
+                    "; Drippers Mode = " + (currentWaterMode == WateringMode::On ? "Open" : "Close") +
+                    "; Drippers Actual = " + (currentDrippersMode == WateringMode::On ? "Open" : "Close") +
+                    "; Sprinklers Mode = " + (desiredSprinklersMode == WateringMode::On ? "Open" : "Close") +
+                    "; Sprinklers Actual = " + (currentSprinklersMode == WateringMode::On ? "Open" : "Close") +
+                    "; Dampers = " + (currentAirMode == AirValveMode::Open ? "Open" : "Close");
+  logMessage(message);
+}
 
 void onFans(int percentage = 70) {
   if(currentPWMSpeed == percentage) return;
@@ -313,9 +322,9 @@ void onDampers() {
 
   logMessage("[Dampers] open start");
 
-  digitalWrite(PIN_DAMPER_POWER, HIGH);
-  delay(100);
   digitalWrite(PIN_DAMPER, HIGH);
+  delay(100);
+  digitalWrite(PIN_DAMPER_POWER, HIGH);
 
   damperActionStartTime = millis();
   damperState = DamperState::Opening;
@@ -328,15 +337,11 @@ void offDampers(bool forceClose = false) {
 
   logMessage("[Dampers] close start");
 
+  digitalWrite(PIN_DAMPER, LOW);
+  delay(100);
   digitalWrite(PIN_DAMPER_POWER, HIGH);
   damperActionStartTime = millis();
   damperState  = DamperState::Closing;
-
-  // delay(1000 * 12); // 12 seconds until dampers get closed
-  // digitalWrite(PIN_DAMPER_POWER, LOW);
-
-  // currentAirMode = AirValveMode::Close;
-  // logModeToS3(getSystemStatusCode());
 }
 
 void tickDampers() {
@@ -344,10 +349,11 @@ void tickDampers() {
 
   if (millis() - damperActionStartTime >= DAMPER_ACTION_DURATION_MS) {
     digitalWrite(PIN_DAMPER_POWER, LOW);
+    delay(10);
 
     if (damperState == DamperState::Opening) {
-      delay(10);
       digitalWrite(PIN_DAMPER, LOW);
+      delay(10);
       currentAirMode = AirValveMode::Open;
       logMessage("[Dampers] open complete");
     } else if (damperState == DamperState::Closing) {
@@ -443,6 +449,7 @@ void setDampers(AirValveMode mode) {
       offDampers();
       break;
     case AirValveMode::Open:
+      logMessage("[Dampers] set to open");
       onDampers();
       break;
     default:
@@ -510,12 +517,15 @@ void onCool() {
   float pwmPercentage = mapFloat(roomTemp, 25.0, 29.0, 20.0, 70.0);
   pwmPercentage = max(20.0f, min(70.0f, pwmPercentage)); // clamp the value
 
-  // Select DRIPPERS mode based on before humidity
+  // As long as the before RH is under 95%, we can add water
   float beforeRH = shtRS485Manager.getBeforeRH();
-  Serial.println("[Cool] Room Temp: " + String(roomTemp) + "°C, Before RH: " + String(beforeRH) + "%");
-  if(!isnan(beforeRH))
-    if(beforeRH < 95) currentWaterMode = WateringMode::On; 
-    else currentWaterMode = WateringMode::Off;
+  if(!isnan(beforeRH)) {
+    if(beforeRH < 95) {
+      currentWaterMode = WateringMode::On; 
+    } else {
+      currentWaterMode = WateringMode::Off;
+    }
+  }
 
   if(currentWaterMode == WateringMode::On) {
     // Set the water budget - 10-40 seconds depending on fan speed 
@@ -542,6 +552,8 @@ void onRegenerate() {
     logMessage("[Regenerate] After RH or Before RH are not available, cannot regenerate");
     off();
     return;
+  } else {
+    logMessage("[Regenerate] After RH: " + String(afterRH) + "; Before RH: " + String(beforeRH));
   }
   if(afterRH > 95 || beforeRH > 95) {
     logMessage("[Regenerate] After RH or Before RH is too high, water will be turned off");
@@ -869,7 +881,7 @@ void sendTelemetry() {
   otaManager.sendTelemetry("Fans_Speed", currentPWMSpeed);
   otaManager.sendTelemetry("Water_Mode", currentWaterMode == WateringMode::On ? "On" : "Off");
   otaManager.sendTelemetry("Drippers_Budget", (int)(wateringBudget.getBudgetDurationMs() / 1000));
-  otaManager.sendTelemetry("Dampers_Status", currentAirMode == AirValveMode::Open ? "Open" : "Close");
+  otaManager.sendTelemetry("Dampers_Status", currentAirMode == AirValveMode::Open ? "true" : "false");
   
   // Send the current time
   struct tm localTime;
@@ -941,7 +953,7 @@ void setSystemAutoMode(bool autoMode) {
   if(autoMode) {
     // turn off manual mode
     manualWaterMode = WateringMode::Off; 
-    currentSystemMode = SystemMode::Stop; // turn off system mode
+    off(); // turn off all devices
     updateSystemMode(); // update the system mode based on the current environment parameters
   } else {
     // turn on manual mode
