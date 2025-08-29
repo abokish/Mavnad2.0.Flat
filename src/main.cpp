@@ -17,10 +17,10 @@
 // ===========================
 // Wifi credentials
 // ===========================
-//const char* WIFI_SSID = "ThermoTera";
-const char* WIFI_SSID = "BokishHome";
-//const char* WIFI_PASSWORD = "Thermo2007";
-const char* WIFI_PASSWORD = "ShalomShalom";
+const char* WIFI_SSID = "ThermoTera";
+//const char* WIFI_SSID = "BokishHome";
+const char* WIFI_PASSWORD = "Thermo2007";
+//const char* WIFI_PASSWORD = "ShalomShalom";
 
 // Timezone offset for GMT+3
 const long gmtOffset_sec = 3 * 3600; // 3 hours in seconds
@@ -31,9 +31,9 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.135";
-//const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
-const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.136";
+const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
+//const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
 // OTA Health Check Constants
 const unsigned int REQUIRED_HEALTH_CHECKS = 15;  // 15 successful loops required
@@ -635,7 +635,8 @@ void startRegeneration() {
   wateringBudget.setBudgetDurationMs(15 * 1000);
 
   // Set regeneration parameters: 80% fan speed, 15 seconds drippers budget, open dampers
-  setSystemMode(AirValveMode::Open, 80, WateringMode::On);
+  currentWaterMode = WateringMode::On;
+  setSystemMode(AirValveMode::Open, 80, currentWaterMode);
   
   // Store the start time
   regenerationStartTime = millis();
