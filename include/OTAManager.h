@@ -28,6 +28,7 @@ public:
   std::function<void(bool)> setSystemAutoModeFunc;
   std::function<bool()> getDrippersAutoModeFunc;
   std::function<void(bool)> setDrippersAutoModeFunc;
+  std::function<void(int)> setInnerFansSpeedFunc;
 
   OTAManager(PubSubClient &mqttClient, const String& fwVersion, const String& deviceToken)
     : m_mqttClient(mqttClient), m_fwVersion(fwVersion), m_token(deviceToken) {
@@ -81,17 +82,11 @@ public:
     esp_ota_img_states_t ota_state;
     if (esp_ota_get_state_partition(NULL, &ota_state) == ESP_OK) {
       if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
-        Serial.println("[OTA] Firmware is pending verify, marking as valid...");
-
-        if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-          Serial.println("[OTA] Marked as valid. Rollback cancelled.");
-          sendTelemetry("fw_state", "UPDATED");
-        } else {
-          Serial.println("[OTA] Failed to mark app as valid!");
-          sendTelemetry("fw_state", "FAILED");
-        }
+        Serial.println("[OTA] Firmware is pending verify - will be validated by health check system");
+        sendTelemetry("fw_state", "PENDING_VALIDATION");
       } else {
         Serial.println("[OTA] Firmware is already valid.");
+        sendTelemetry("fw_state", "VALID");
       }
     } else {
       Serial.println("[OTA] Failed to get OTA state!");
@@ -198,6 +193,11 @@ public:
       setDrippersAutoModeFunc(mode);
       Serial.printf("[RPC] Set drippers auto mode to: %d\n", mode);
 
+    } else if (method == "setInnerFanSpeed") {
+      int percentage = doc["params"] | 0;
+      setInnerFansSpeedFunc(percentage);  
+      Serial.printf("[RPC] Set inner fan speed to %i%\n", percentage);
+    
     } else {
       Serial.println("[RPC] Unknown method.");
     }

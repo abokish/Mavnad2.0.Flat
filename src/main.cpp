@@ -17,10 +17,10 @@
 // ===========================
 // Wifi credentials
 // ===========================
-const char* WIFI_SSID = "ThermoTera";
-//const char* WIFI_SSID = "BokishHome";
-const char* WIFI_PASSWORD = "Thermo2007";
-//const char* WIFI_PASSWORD = "ShalomShalom";
+//const char* WIFI_SSID = "ThermoTera";
+const char* WIFI_SSID = "BokishHome";
+//const char* WIFI_PASSWORD = "Thermo2007";
+const char* WIFI_PASSWORD = "ShalomShalom";
 
 // Timezone offset for GMT+3
 const long gmtOffset_sec = 3 * 3600; // 3 hours in seconds
@@ -31,9 +31,14 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.126";
-const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
-//const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.135";
+//const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
+const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
+
+// OTA Health Check Constants
+const unsigned int REQUIRED_HEALTH_CHECKS = 15;  // 15 successful loops required
+const unsigned long MAX_VALIDATION_TIME = 5 * 60 * 1000;  // 5 minutes timeout
+const unsigned long HEARTBEAT_INTERVAL = 30 * 1000;  // 30 seconds heartbeat
 
 // Setup ThingsBoard client
 WiFiClient wiFiClient;
@@ -62,6 +67,13 @@ const int PUMP_PWM_CHANNEL = 1;
 const int PUMP_PWM_FREQ = 1000;     // 1 kHz (safe value within 100–2000 Hz)
 const int PUMP_PWM_RESOLUTION = 8;  // 8-bit (0–255)
 
+const int PIN_FAN_INNER1 = 8;
+const int PIN_FAN_INNER_ADC = 18;
+//const int PIN_FAN_INNER2 = 7;
+const int FAN_INNER_CHANNEL = 2;
+const int FAN_INNER_FREQUENCY = 20000; // PWM frequency in Hz
+const int FAN_INNER_RESOLUTION = 8;  // 8-bit resolution (0-255)
+
 const int fanPins[] = { 
   PIN_FAN_RIGHT1, 
   PIN_FAN_RIGHT2, 
@@ -84,6 +96,15 @@ SHTManager_RS485 shtRS485Manager(RS485Serial); // For RS485 sensors
 S3Log* dataLog;
 TimeClient* timeClient;
 bool isDataSent = false;
+
+// OTA Health Check Variables
+unsigned long firmwareStartTime = 0;
+unsigned int healthCheckCounter = 0;
+bool firmwareValidated = false;
+unsigned long lastHeartbeatTime = 0;
+bool isFirstBootAfterOTA = false;
+unsigned long lastLoopTime = 0;
+const unsigned long MAX_LOOP_TIME = 10 * 1000;  // 10 seconds max loop time
 
 // Define the AirValveMode enum
 enum AirValveMode {
@@ -188,10 +209,18 @@ float lastAfterHumidity = NAN; // Last valid humidity reading
 bool debugMode = false;
 unsigned long damperActionStartTime = 0;
 const unsigned long DAMPER_ACTION_DURATION_MS = 15 * 1000;
+unsigned long regenerationStartTime = 0; // When the current regeneration cycle started
+bool canStartRegeneration = true; // Track if we can start regeneration in this slot - true for first time in slot
 RTC_DS3231 rtc;
 
 void offDrippers();
 void offSprinklers();
+void startRegeneration();
+bool isRegenerationEffective();
+bool isTopOfHour();
+bool isSystemHealthy();
+
+// Define TimeBudgetManager instances for watering and sprinklers
 TimeBudgetManager wateringBudget(1L * 60 * 1000, 0.25L * 60 * 1000, offDrippers);
 TimeBudgetManager sprinklersBudget(4L * 60 * 1000, 0.166L * 60 * 1000, offSprinklers);
 
@@ -497,11 +526,10 @@ float mapFloat(float x, float in_min, float in_max, float out_min, float out_max
 
 void setWaterBudgetFromPwm(int pwm) {
   // Set the watering budget based on the fan speed
-  // The budget is set to 10-40 seconds depending on the fan speed
-  float budgetTime = mapFloat(pwm, 20.0, 70.0, 10.0, 40.0);
-  String message = "[setWaterBudgetFromPwm] Setting watering budget to " + (String)budgetTime + " seconds\n";
-  logMessage(message);
-  wateringBudget.setBudgetDurationMs(budgetTime * 1000);
+  pwm = constrain(pwm, 0, 100); // Ensure pwm is within 0-100%
+  int budgetTime = map(pwm, 0, 100, 0, 15);     // seconds 0..15
+  logMessage("[setWaterBudgetFromPwm] Setting watering budget to " + String(budgetTime) + " seconds");
+  wateringBudget.setBudgetDurationMs((unsigned long)budgetTime * 1000UL);
 }
 
 void onCool() {
@@ -540,50 +568,159 @@ void onCool() {
   currentSystemMode = SystemMode::Cool;
 }
 
+
+
+// Helper function to check if it's the top of the hour (minute = 0)
+bool isTopOfHour() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    logMessage("[Regenerate] Failed to get local time, cannot determine if it's top of hour");
+    return false;
+  }
+  return timeinfo.tm_min == 0;
+}
+
+// Helper function to check if regeneration is effective
+bool isRegenerationEffective() {
+  float beforeRH = shtRS485Manager.getBeforeRH();
+  float afterRH = shtRS485Manager.getAfterRH();
+  
+  if(isnan(beforeRH)) {
+    logMessage("[Regenerate] Before RH is not available, cannot validate effectiveness");
+    return false;
+  }
+  
+  if(isnan(afterRH)) {
+    logMessage("[Regenerate] After RH is not available, cannot validate effectiveness");
+    return false;
+  }
+  
+  // Additional safety checks
+  if (beforeRH < 0 || afterRH < 0 || beforeRH > 100 || afterRH > 100) {
+    logMessage("[Regenerate] Invalid humidity values - Before RH: " + String(beforeRH) + 
+               "%, After RH: " + String(afterRH) + "%");
+    return false;
+  }
+  
+  // Check if after RH is at least 10% lower than before RH
+  // Example: if beforeRH = 60%, then threshold = 54% (60 * 0.9)
+  // Regeneration is effective if afterRH <= 54% (meaning humidity was added)
+  float threshold = beforeRH * 0.95f; // 10% relative threshold
+  bool isEffective = threshold >= afterRH;
+  
+  logMessage("[Regenerate] Effectiveness check - Before RH: " + String(beforeRH, 1) + 
+             "%, After RH: " + String(afterRH, 1) + "%, Threshold: " + String(threshold, 1) + 
+             "%, Effective: " + String(isEffective ? "YES" : "NO"));
+  
+  return isEffective;
+}
+
+// Helper function to start fresh regeneration
+void startRegeneration() {
+  logMessage("[Regenerate] Starting fresh regeneration cycle");
+  
+  // Log current humidity values for reference
+  float beforeRH = shtRS485Manager.getBeforeRH();
+  float afterRH = shtRS485Manager.getAfterRH();
+  float ambiantRH = shtRS485Manager.getAmbiantRH();
+  
+  if (!isnan(beforeRH) && !isnan(afterRH) && !isnan(ambiantRH)) {
+    logMessage("[Regenerate] Starting with - Before RH: " + String(beforeRH, 1) + 
+               "%, After RH: " + String(afterRH, 1) + "%, Ambiant RH: " + String(ambiantRH, 1) + "%");
+  } else {
+    logMessage("[Regenerate] Warning: Some humidity sensors not available");
+  }
+  
+  // Set drippers budget to 15 seconds
+  wateringBudget.setBudgetDurationMs(15 * 1000);
+
+  // Set regeneration parameters: 80% fan speed, 15 seconds drippers budget, open dampers
+  setSystemMode(AirValveMode::Open, 80, WateringMode::On);
+  
+  // Store the start time
+  regenerationStartTime = millis();
+  
+  // Set system mode
+  currentSystemMode = SystemMode::Regenerate;
+  
+  logMessage("[Regenerate] Regeneration started - Fans: 80%, Drippers: 15s, Dampers: Open");
+}
+
 void onRegenerate() {
   debugMessage("on regenerate");
 
-  // Gets water mode
-  WateringMode waterMode = WateringMode::Off;
-
-  float afterRH = shtRS485Manager.getAfterRH();
-  float beforeRH = shtRS485Manager.getBeforeRH();
-  if(isnan(afterRH) || isnan(beforeRH)) {
-    logMessage("[Regenerate] After RH or Before RH are not available, cannot regenerate");
-    off();
-    return;
-  } else {
-    logMessage("[Regenerate] After RH: " + String(afterRH) + "; Before RH: " + String(beforeRH));
+  // If we're not currently regenerating, check if it's time to start
+  if (currentSystemMode != SystemMode::Regenerate) {
+    // Priority 1: First time entering regeneration slot - start immediately
+    if (canStartRegeneration) {
+      logMessage("[Regenerate] First time in regeneration slot - starting immediately");
+      startRegeneration();
+      canStartRegeneration = false;  // Clear the flag after using it
+      return;
+    }
+    
+    // Priority 2: Check if it's top of hour for subsequent attempts
+    if (isTopOfHour()) {
+      logMessage("[Regenerate] Top of hour - starting fresh regeneration");
+      startRegeneration();
+      return;
+    } else {
+      logMessage("[Regenerate] Not time to start regeneration yet (not top of hour)");
+      return; // Not time yet
+    }
   }
-  if(afterRH > 95 || beforeRH > 95) {
-    logMessage("[Regenerate] After RH or Before RH is too high, water will be turned off");
-    waterMode = WateringMode::Off; // Turn off water if RH is too high
-  } else {
-    waterMode = WateringMode::On; // Turn on water if RH is low
-  }
-
-  // After desiding on water mode, set the budget time
-  float ambiantRh = shtRS485Manager.getAmbiantRH();
-  if(isnan(ambiantRh)) {
-    logMessage("[Regenerate] Ambiant RH is not available, cannot regenerate");
-    off();
-    return;
-  }
-  float delta = 95.0f - ambiantRh;
-  float budgetTime = mapFloat(delta, 0.0f, 20.0f, 0.0f, 30.0f); // 0-30 seconds depending on ambiant RH
-  wateringBudget.setBudgetDurationMs(budgetTime * 1000); // Set the budget time
-
-  // Gets air mode
-  AirValveMode airMode = getAirModeByRoom();
   
-  setSystemMode(airMode, 80, waterMode);
-
-  currentSystemMode = SystemMode::Regenerate;
+  // We're already regenerating, check if it's time to validate effectiveness
+  if (regenerationStartTime > 0 && millis() - regenerationStartTime >= 10 * 60 * 1000) { // 10 minutes
+    logMessage("[Regenerate] 10+ minutes passed, checking regeneration effectiveness");
+    
+    if (!isRegenerationEffective()) {
+      logMessage("[Regenerate] Regeneration is not effective - stopping and waiting for next hour");
+      off(); // Stop regeneration and wait for next hour
+      regenerationStartTime = 0; // Reset start time
+      return;
+    } else {
+      logMessage("[Regenerate] Regeneration is effective - continuing");
+      // Continue regenerating with current parameters
+    }
+  } else if (regenerationStartTime > 0) {
+    // Less than 10 minutes, continue with current parameters
+    unsigned long remainingMinutes = (10 * 60 * 1000 - (millis() - regenerationStartTime)) / 60000;
+    logMessage("[Regenerate] Continuing regeneration - " + String(remainingMinutes) + " minutes until effectiveness check");
+  }
 }
 
 void onHeat() {
   logMessage("[onHeat] on");
   Serial.println("Heat mode is not supported yet");
+}
+
+void setInnerFansSpeed(int percentage = -1) {
+  String message = "[setInnerFansSpeed] ";
+
+  if(percentage == -1) { // Auto mode
+    float roomTemp = shtRS485Manager.getRoomTemp();
+    if(isnan(roomTemp)) {
+      ledcWrite(FAN_INNER_CHANNEL, 0); // turn off inner fans
+      logMessage("[setInnerFansSpeed] Room temp not available. Fans turned off.");
+      return;
+    }
+
+    // Calculate PWM percentage based on room temperature
+    if(roomTemp >= 27.0) percentage = 30;
+    else if(roomTemp <= 23.0) percentage = 0;
+    else percentage = (int)mapFloat(roomTemp, 23.0, 27.0, 20.0, 30.0);
+
+    message += "Room temp: " + String(roomTemp, 1) + "°C → ";
+  }
+
+  // Convert to duty cycle (0–255 for 8-bit resolution)
+  percentage = constrain(percentage, 0, 100); // just to make sure
+  int duty = map(percentage, 0, 100, 0, 255);
+  ledcWrite(FAN_INNER_CHANNEL, duty);
+
+  message += "Fan speed: " + String(percentage) + "% (duty " + String(duty) + ")";
+  logMessage(message);
 }
 
 // ========== update mode =============
@@ -636,6 +773,9 @@ void updateSystemMode() {
       newMode = SystemMode::Stop; // If temperature is high, stop the system
       logMessage("[UpdateSystemMode] Room temperature is too high for heating: " + String(roomTemp) + "°C");
     }
+  } else if(newMode == SystemMode::Regenerate) { // If we got the regenerate mode, check if we can start regeneration
+    // Regeneration mode is scheduled - the onRegenerate() function will handle the actual start logic
+    // based on whether it's the top of the hour and other conditions
   }
 
   // Will be true only if the mode has changed
@@ -673,6 +813,12 @@ void updateSystemMode() {
   //     newMode = SystemMode::Regenerate; // If ambiant RH is high enough, regenerate the mattress
   //   }
   // }
+
+  // Reset regeneration flag when exiting regeneration time slot
+  if (currentSystemMode == SystemMode::Regenerate && newMode != SystemMode::Regenerate) {
+    canStartRegeneration = true;  // Reset to true for next regeneration slot
+    logMessage("[UpdateSystemMode] Exiting regeneration time slot - resetting regeneration flag");
+  }
     
   switch(newMode) {
     case SystemMode::Regenerate:
@@ -691,6 +837,9 @@ void updateSystemMode() {
       off();
       break;
   }
+
+  // Update inner fans speed
+  setInnerFansSpeed();
 }
 
 void tickDrippers() {
@@ -765,6 +914,41 @@ void PrintSensors(){
   Serial.println("; RH = " + (String)shtRS485Manager.getAfterRH());
   Serial.print("Room: Temp = " + (String)shtRS485Manager.getRoomTemp());
   Serial.println("; RH = " + (String)shtRS485Manager.getRoomRH());
+  
+     // Show regeneration status if applicable
+   if (currentSystemMode == SystemMode::Regenerate && regenerationStartTime > 0) {
+     unsigned long regenerationTime = (millis() - regenerationStartTime) / 1000; // in seconds
+     Serial.println("Regeneration Status: Active for " + String(regenerationTime) + " seconds");
+     if (regenerationTime >= 600) { // 10 minutes
+       Serial.println("Regeneration: Ready for effectiveness check");
+     } else {
+       unsigned long remainingTime = 600 - regenerationTime;
+       Serial.println("Regeneration: " + String(remainingTime) + " seconds until effectiveness check");
+     }
+   } else if (currentSystemMode == SystemMode::Regenerate) {
+     Serial.println("Regeneration Status: Starting up...");
+   }
+   
+   // Show regeneration slot status
+   if (canStartRegeneration) {
+    Serial.println("Regeneration Slot: Can start regeneration - will start immediately");
+  } else {
+    Serial.println("Regeneration Slot: Regeneration already attempted - waiting for top of hour");
+  }
+  
+  // Show OTA status if applicable
+  if (isFirstBootAfterOTA && !firmwareValidated) {
+    Serial.println("OTA Status: VALIDATING NEW FIRMWARE");
+    Serial.printf("Health check progress: %d/%d\n", healthCheckCounter, REQUIRED_HEALTH_CHECKS);
+    unsigned long elapsed = (millis() - firmwareStartTime) / 1000;
+    unsigned long remaining = (MAX_VALIDATION_TIME - (millis() - firmwareStartTime)) / 1000;
+    Serial.printf("Time elapsed: %ds, Time remaining: %ds\n", elapsed, remaining);
+    Serial.printf("System healthy: %s\n", isSystemHealthy() ? "YES" : "NO");
+    Serial.printf("Last loop time: %dms\n", lastLoopTime);
+  } else if (firmwareValidated) {
+    Serial.println("OTA Status: FIRMWARE VALIDATED");
+  }
+  
   Serial.println("--------------------------------------------");
 }
 
@@ -880,13 +1064,62 @@ void sendTelemetry() {
   otaManager.sendTelemetry("System_Mode", SystemModeHelper::toString(currentSystemMode));
   otaManager.sendTelemetry("Fans_Speed", currentPWMSpeed);
   otaManager.sendTelemetry("Water_Mode", currentWaterMode == WateringMode::On ? "On" : "Off");
+  otaManager.sendTelemetry("Drippers_Actual", currentDrippersMode == WateringMode::On ? "Open" : "Close");
+  otaManager.sendTelemetry("Drippers_Slot", (int)(wateringBudget.getSlotDurationMs() / 1000));
   otaManager.sendTelemetry("Drippers_Budget", (int)(wateringBudget.getBudgetDurationMs() / 1000));
   otaManager.sendTelemetry("Dampers_Status", currentAirMode == AirValveMode::Open ? "true" : "false");
+  otaManager.sendTelemetry("Dampers_Actual", currentAirMode == AirValveMode::Open ? "Open" : "Close");
+  otaManager.sendTelemetry("Sprinklers_Mode", desiredSprinklersMode == WateringMode::On ? "Open" : "Close");
+  otaManager.sendTelemetry("Sprinklers_Actual", currentSprinklersMode == WateringMode::On ? "Open" : "Close");
+  otaManager.sendTelemetry("Sprinklers_Slot", (int)(sprinklersBudget.getSlotDurationMs() / 1000));
+  otaManager.sendTelemetry("Sprinklers_Budget", (int)(sprinklersBudget.getBudgetDurationMs() / 1000));
+
+  // Regeneration status telemetry
+  if (currentSystemMode == SystemMode::Regenerate && regenerationStartTime > 0) {
+    unsigned long regenerationTime = (millis() - regenerationStartTime) / 1000; // in seconds
+    otaManager.sendTelemetry("Regeneration_Active_Time", (int)regenerationTime);
+    otaManager.sendTelemetry("Regeneration_Ready_For_Check", regenerationTime >= 600 ? "Yes" : "No");
+    if (regenerationTime < 600) {
+      unsigned long remainingTime = 600 - regenerationTime;
+      otaManager.sendTelemetry("Regeneration_Time_Until_Check", (int)remainingTime);
+    }
+  } else if (currentSystemMode == SystemMode::Regenerate) {
+    otaManager.sendTelemetry("Regeneration_Active_Time", 0);
+    otaManager.sendTelemetry("Regeneration_Ready_For_Check", "Starting");
+  } else {
+    otaManager.sendTelemetry("Regeneration_Active_Time", 0);
+    otaManager.sendTelemetry("Regeneration_Ready_For_Check", "N/A");
+  }
+
+  int fanAdcRaw = analogRead(PIN_FAN_INNER_ADC);
+  float fanVoltage = fanAdcRaw * (3.3 / 4095.0);  // Adjust if voltage divider exists
+  otaManager.sendTelemetry("InnerFan_Voltage", fanVoltage);
+
+  int fanDuty = ledcRead(FAN_INNER_CHANNEL);
+  float fanPercent = (fanDuty / 255.0f) * 100.0f;
+  otaManager.sendTelemetry("InnerFan_PWM", fanPercent);
+
   
   // Send the current time
   struct tm localTime;
   if(getLocalTime(&localTime)) 
     otaManager.sendTelemetry("Current_Time", timeToString(localTime));
+  
+  // OTA Status Telemetry
+  if (isFirstBootAfterOTA && !firmwareValidated) {
+    otaManager.sendTelemetry("OTA_Status", "VALIDATING");
+    otaManager.sendTelemetry("OTA_Health_Progress", healthCheckCounter);
+    otaManager.sendTelemetry("OTA_Health_Remaining", REQUIRED_HEALTH_CHECKS - healthCheckCounter);
+    otaManager.sendTelemetry("OTA_Validation_Time_Elapsed", (int)((millis() - firmwareStartTime) / 1000));
+    otaManager.sendTelemetry("OTA_Validation_Time_Remaining", (int)((MAX_VALIDATION_TIME - (millis() - firmwareStartTime)) / 1000));
+    otaManager.sendTelemetry("OTA_System_Healthy", isSystemHealthy());
+    otaManager.sendTelemetry("OTA_Last_Loop_Time", lastLoopTime);
+  } else if (firmwareValidated) {
+    otaManager.sendTelemetry("OTA_Status", "VALIDATED");
+    otaManager.sendTelemetry("OTA_Firmware_Version", CURRENT_FIRMWARE_VERSION);
+  } else {
+    otaManager.sendTelemetry("OTA_Status", "NORMAL");
+  }
   
   // S3 server
   delay(300);
@@ -916,12 +1149,14 @@ void setDampersStatus(bool isOpen) {
 }
 
 bool getSolenoidStatus() {
-  return currentWaterMode == WateringMode::On;
+  return (currentWaterMode == WateringMode::On);
 }
 
 void setSolenoidStatus(bool status) {
   currentSystemMode = SystemMode::Manual;
-  setWater(status ? WateringMode::On : WateringMode::Off);
+  logMessage("[setSolenoidStatus] Setting solenoid status to " + String(status ? "On" : "Off"));
+  currentWaterMode = status ? WateringMode::On : WateringMode::Off;
+  setWater(currentWaterMode);
 }
 
 int getWaterSlot() { // minutes
@@ -978,6 +1213,131 @@ void setDrippersAutoMode(bool autoMode) {
 void HandleManualControl();
 
 // ==============================================================================
+// OTA HEALTH CHECK FUNCTIONS
+// ==============================================================================
+
+// Check if this is the first boot after an OTA update
+bool isFirstBootAfterOTAUpdate() {
+  esp_ota_img_states_t ota_state;
+  if (esp_ota_get_state_partition(NULL, &ota_state) == ESP_OK) {
+    return (ota_state == ESP_OTA_IMG_PENDING_VERIFY);
+  }
+  return false;
+}
+
+// Load health check state from NVS
+void loadHealthCheckState() {
+  // For now, we'll use simple variables. In a more robust implementation,
+  // you could use NVS to persist these values across reboots
+  if (isFirstBootAfterOTAUpdate()) {
+    Serial.println("[OTA-Health] First boot after OTA update detected");
+    isFirstBootAfterOTA = true;
+    firmwareStartTime = millis();
+    healthCheckCounter = 0;
+    firmwareValidated = false;
+    lastHeartbeatTime = 0;
+  } else {
+    Serial.println("[OTA-Health] Normal boot - firmware already validated");
+    isFirstBootAfterOTA = false;
+    firmwareValidated = true;
+  }
+}
+
+// Save health check state to NVS (placeholder for future implementation)
+void saveHealthCheckState() {
+  // In a more robust implementation, save to NVS
+  // For now, we'll just use the variables
+}
+
+// Check if WiFi and sensors are healthy
+bool isSystemHealthy() {
+  // Check WiFi connection
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[OTA-Health] WiFi not connected - system unhealthy");
+    return false;
+  }
+  
+  // Check if sensors are responding (basic check)
+  if (shtRS485Manager.getAmbiantTemp() == FLOAT_NAN) {
+    Serial.println("[OTA-Health] Sensors not responding - system unhealthy");
+    return false;
+  }
+  
+  return true;
+}
+
+// Mark firmware as valid and send confirmation
+void markFirmwareValid() {
+  if (firmwareValidated) {
+    return; // Already validated
+  }
+  
+  Serial.println("[OTA-Health] Firmware validation successful! Marking as valid...");
+  
+  // Mark the OTA partition as valid
+  esp_ota_img_states_t ota_state;
+  if (esp_ota_get_state_partition(NULL, &ota_state) == ESP_OK) {
+    if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+      if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+        Serial.println("[OTA-Health] Firmware marked as valid. Rollback cancelled.");
+        firmwareValidated = true;
+        
+        // Send validation confirmation to ThingsBoard
+        otaManager.sendTelemetry("fw_state", "VALIDATED");
+        otaManager.sendTelemetry("fw_version_validated", CURRENT_FIRMWARE_VERSION);
+        otaManager.sendTelemetry("fw_validation_time", (int)((millis() - firmwareStartTime) / 1000));
+        
+        Serial.printf("[OTA-Health] Firmware %s validated in %d seconds\n", 
+                     CURRENT_FIRMWARE_VERSION.c_str(), 
+                     (int)((millis() - firmwareStartTime) / 1000));
+      } else {
+        Serial.println("[OTA-Health] Failed to mark firmware as valid!");
+      }
+    }
+  }
+}
+
+// Trigger rollback to previous firmware
+void triggerRollback(const String& reason) {
+  Serial.printf("[OTA-Health] Triggering rollback: %s\n", reason.c_str());
+  
+  // Send rollback notification to ThingsBoard
+  otaManager.sendTelemetry("fw_state", "ROLLBACK");
+  otaManager.sendTelemetry("fw_rollback_reason", reason);
+  
+  // Mark current firmware as invalid to trigger rollback
+  if (esp_ota_mark_app_invalid_rollback_and_reboot() == ESP_OK) {
+    Serial.println("[OTA-Health] Rollback initiated. Rebooting...");
+    delay(1000);
+    ESP.restart();
+  } else {
+    Serial.println("[OTA-Health] Failed to trigger rollback!");
+    // Force restart as fallback
+    ESP.restart();
+  }
+}
+
+// Send heartbeat during validation period
+void sendValidationHeartbeat() {
+  if (firmwareValidated || !isFirstBootAfterOTA) {
+    return; // No need for heartbeat
+  }
+  
+  unsigned long now = millis();
+  if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
+    // Send heartbeat with validation progress
+    otaManager.sendTelemetry("fw_validation_progress", healthCheckCounter);
+    otaManager.sendTelemetry("fw_validation_remaining", REQUIRED_HEALTH_CHECKS - healthCheckCounter);
+    otaManager.sendTelemetry("fw_validation_time_elapsed", (int)((now - firmwareStartTime) / 1000));
+    otaManager.sendTelemetry("fw_validation_time_remaining", (int)((MAX_VALIDATION_TIME - (now - firmwareStartTime)) / 1000));
+    
+    lastHeartbeatTime = now;
+    Serial.printf("[OTA-Health] Heartbeat sent - Progress: %d/%d, Time: %ds\n", 
+                 healthCheckCounter, REQUIRED_HEALTH_CHECKS, (int)((now - firmwareStartTime) / 1000));
+  }
+}
+
+// ==============================================================================
 // SETUP
 // ==============================================================================
 void setup() {
@@ -1024,6 +1384,18 @@ void setup() {
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
+
+  // Inner Fans
+  logMessage("[setup] set inner fans");
+  pinMode(PIN_FAN_INNER1, OUTPUT);
+  pinMode(PIN_FAN_INNER_ADC, INPUT);
+  //pinMode(PIN_FAN_INNER2, OUTPUT);
+  digitalWrite(PIN_FAN_INNER1, LOW);
+  //digitalWrite(PIN_FAN_INNER2, LOW);
+  ledcSetup(FAN_INNER_CHANNEL, FAN_INNER_FREQUENCY, FAN_INNER_RESOLUTION);
+  ledcAttachPin(PIN_FAN_INNER1, FAN_INNER_CHANNEL);
+  //ledcAttachPin(PIN_FAN_INNER2, FAN_INNER_CHANNEL);
+  ledcWrite(FAN_INNER_CHANNEL, 0);
 
   // Setup SHT sensors manager
   logMessage("[setup] SHT RS485 sensors manager:");
@@ -1129,16 +1501,31 @@ void setup() {
   otaManager.setSystemAutoModeFunc = setSystemAutoMode;
   otaManager.getDrippersAutoModeFunc = getDrippersAutoMode;
   otaManager.setDrippersAutoModeFunc = setDrippersAutoMode;
+  otaManager.setInnerFansSpeedFunc = setInnerFansSpeed;
   otaManager.begin();
   otaManager.sendAttribute("fw_version_actual", CURRENT_FIRMWARE_VERSION);
+
+  // Initialize OTA Health Check System
+  logMessage("[Setup] Initializing OTA Health Check System");
+  loadHealthCheckState();
+  
+  if (isFirstBootAfterOTA) {
+    Serial.println("[OTA-Health] Starting firmware validation process...");
+    otaManager.sendTelemetry("fw_state", "VALIDATING");
+    otaManager.sendTelemetry("fw_version_validating", CURRENT_FIRMWARE_VERSION);
+  }
 
   logMessage("[setup] setup done successfuly!");
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
 
+  // Initialize regeneration start time to 0 (no regeneration active)
+  regenerationStartTime = 0;
+
   updateSystemMode();
   PrintSensors();
+  sendTelemetry();
 
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
@@ -1149,9 +1536,43 @@ void setup() {
 // ==============================================================================
 bool is2Minute = false;
 void loop() {
+  unsigned long loopStartTime = millis();
+  
   otaManager.tick();
   shtRS485Manager.tick();
   tick();
+
+  // OTA Health Check Logic
+  if (!firmwareValidated && isFirstBootAfterOTA) {
+    // Increment health check counter
+    healthCheckCounter++;
+    
+    // Check if system is healthy
+    if (!isSystemHealthy()) {
+      Serial.println("[OTA-Health] System unhealthy - triggering rollback");
+      triggerRollback("System unhealthy");
+      return; // Exit loop to prevent further execution
+    }
+    
+    // Check if we have enough successful loops
+    if (healthCheckCounter >= REQUIRED_HEALTH_CHECKS) {
+      markFirmwareValid();
+    }
+    
+    // Check timeout
+    if (millis() - firmwareStartTime > MAX_VALIDATION_TIME) {
+      Serial.printf("[OTA-Health] Validation timeout after %d seconds - triggering rollback\n", 
+                   (int)(MAX_VALIDATION_TIME / 1000));
+      triggerRollback("Validation timeout");
+      return; // Exit loop to prevent further execution
+    }
+    
+    // Send heartbeat during validation
+    sendValidationHeartbeat();
+    
+    // Save progress
+    saveHealthCheckState();
+  }
 
   // Every 2 minutes
   if((timeClient->getMinute() % 2) == 0) {
@@ -1159,7 +1580,7 @@ void loop() {
       is2Minute = true;
       esp_task_wdt_reset(); // I'm still alive - Reset watchdog to prevent timeout
       PrintSensors();
-      esp_task_wdt_reset(); // I'm still alive - Reset watchdog to prevent timeout
+      esp_task_wdt_reset(); // I'm still alive - Reset watchdog to timeout
     }
   } else {
     is2Minute = false;
@@ -1185,6 +1606,19 @@ void loop() {
   }
 
   HandleManualControl();
+
+  // Check if loop is taking too long (endless loop detection)
+  unsigned long loopTime = millis() - loopStartTime;
+  if (loopTime > MAX_LOOP_TIME) {
+    Serial.printf("[OTA-Health] Loop took too long: %dms - possible endless loop\n", loopTime);
+    if (!firmwareValidated && isFirstBootAfterOTA) {
+      triggerRollback("Endless loop detected");
+      return;
+    }
+  }
+  
+  // Update last loop time for health monitoring
+  lastLoopTime = loopTime;
 
   esp_task_wdt_reset(); // I'm still alive - Reset watchdog to prevent timeout
 }
@@ -1260,6 +1694,15 @@ void HandleManualControl(){
     else if (input.equalsIgnoreCase("reg")) { // REG (REGENERATION) ===========================
       Serial.println("Set system in REGENERATING mode");
       onRegenerate();
+    }
+    else if (input.equalsIgnoreCase("regeff")) { // REGENERATION EFFECTIVENESS CHECK ===========================
+      Serial.println("Testing regeneration effectiveness check...");
+      if (currentSystemMode == SystemMode::Regenerate) {
+        bool isEffective = isRegenerationEffective();
+        Serial.println("Regeneration effectiveness: " + String(isEffective ? "YES" : "NO"));
+      } else {
+        Serial.println("System is not in regeneration mode");
+      }
     }
     else if(input.equalsIgnoreCase("cool")) { // COOL ==============================
       Serial.println("Set system in COOLING mode");
@@ -1349,8 +1792,57 @@ void HandleManualControl(){
       currentSystemMode = SystemMode::Stop;
       updateSystemMode();
     }
-    else {
-      Serial.println("No such command. use: print, stop, dampers, drip, sprink");
+    else if(input.equalsIgnoreCase("otastatus")) { // OTA STATUS =============================
+      Serial.println("=== OTA Health Status ===");
+      Serial.printf("First boot after OTA: %s\n", isFirstBootAfterOTA ? "YES" : "NO");
+      Serial.printf("Firmware validated: %s\n", firmwareValidated ? "YES" : "NO");
+      if (isFirstBootAfterOTA && !firmwareValidated) {
+        Serial.printf("Health check progress: %d/%d\n", healthCheckCounter, REQUIRED_HEALTH_CHECKS);
+        unsigned long elapsed = (millis() - firmwareStartTime) / 1000;
+        unsigned long remaining = (MAX_VALIDATION_TIME - (millis() - firmwareStartTime)) / 1000;
+        Serial.printf("Time elapsed: %ds, Time remaining: %ds\n", elapsed, remaining);
+        Serial.printf("System healthy: %s\n", isSystemHealthy() ? "YES" : "NO");
+        Serial.printf("Last loop time: %dms\n", lastLoopTime);
+      }
+      Serial.printf("Current firmware version: %s\n", CURRENT_FIRMWARE_VERSION.c_str());
+      Serial.println("========================");
     }
+    else if(input.equalsIgnoreCase("otarollback")) { // OTA ROLLBACK =============================
+      Serial.println("=== OTA Manual Rollback ===");
+      Serial.println("WARNING: This will rollback to the previous firmware version!");
+      Serial.println("Are you sure? Type 'YES' to confirm:");
+      while (!Serial.available()) delay(10);
+      String confirmation = Serial.readStringUntil('\n');
+      confirmation.trim();
+      if (confirmation.equalsIgnoreCase("YES")) {
+        Serial.println("Manual rollback confirmed. Rolling back...");
+        triggerRollback("Manual rollback requested");
+      } else {
+        Serial.println("Rollback cancelled.");
+      }
+      Serial.println("==========================");
+    }
+         else if(input.equalsIgnoreCase("otavalidate")) { // OTA VALIDATE =============================
+       Serial.println("=== OTA Manual Validation ===");
+       if (isFirstBootAfterOTA && !firmwareValidated) {
+         Serial.println("Manually validating firmware...");
+         markFirmwareValid();
+       } else if (firmwareValidated) {
+         Serial.println("Firmware is already validated.");
+       } else {
+         Serial.println("No pending firmware to validate.");
+       }
+       Serial.println("============================");
+     }
+     else if(input.equalsIgnoreCase("regslot")) { // REGENERATION SLOT STATUS =============================
+       Serial.println("=== Regeneration Slot Status ===");
+       Serial.printf("First time in regeneration slot: %s\n", canStartRegeneration ? "YES" : "NO");
+       Serial.printf("Current system mode: %s\n", SystemModeHelper::toString(currentSystemMode).c_str());
+       Serial.printf("Regeneration start time: %lu\n", regenerationStartTime);
+       Serial.println("================================");
+     }
+         else {
+          Serial.println("No such command. use: print, stop, dampers, drip, sprink, reg, regeff, otastatus, otarollback, otavalidate, regslot");
+     }
   }
 }
