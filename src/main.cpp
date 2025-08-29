@@ -31,7 +31,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.136";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.139";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
 //const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
@@ -199,12 +199,14 @@ struct SystemModeHelper {
 DamperState damperState = DamperState::Idle;
 SystemMode currentSystemMode = SystemMode::Stop;
 AirValveMode currentAirMode = AirValveMode::Close;
+AirValveMode desiredDamperState = AirValveMode::Close;
 WateringMode currentWaterMode = WateringMode::Off;
 WateringMode currentDrippersMode = WateringMode::Off;
 WateringMode desiredSprinklersMode = WateringMode::Off;
 WateringMode currentSprinklersMode = WateringMode::Off;
 WateringMode manualWaterMode = WateringMode::Off;
 int currentPWMSpeed = 0; // in percentage (0 - 100)
+int currentInnerPWMSpeed = 0; // in percentage (0 - 100)
 float lastAfterHumidity = NAN; // Last valid humidity reading
 bool debugMode = false;
 unsigned long damperActionStartTime = 0;
@@ -347,6 +349,7 @@ void offFans() {
 void onDampers() {
   debugMessage("on dampers");
   if(currentAirMode == AirValveMode::Open) return;
+  desiredDamperState = AirValveMode::Open; // set the desired state to open
   if (damperState  != DamperState::Idle) return; // Already busy
 
   logMessage("[Dampers] open start");
@@ -362,6 +365,7 @@ void onDampers() {
 void offDampers(bool forceClose = false) {
   debugMessage("off dampers");
   if(!forceClose && currentAirMode == AirValveMode::Close) return;
+  desiredDamperState = AirValveMode::Close; // set the desired state to close
   if (damperState  != DamperState::Idle) return; // busy
 
   logMessage("[Dampers] close start");
@@ -392,6 +396,16 @@ void tickDampers() {
 
     damperState = DamperState::Idle;
     logModeToS3(getSystemStatusCode());
+
+    // the action has finished, check if the desired state is different from the actual state
+    if(desiredDamperState != currentAirMode) {
+      logMessage("[Dampers] desired state is different from the actual state");
+      if(desiredDamperState == AirValveMode::Open) {
+        onDampers();
+      } else {
+        offDampers();
+      }
+    }
   }
 }
 
@@ -696,6 +710,10 @@ void onHeat() {
   Serial.println("Heat mode is not supported yet");
 }
 
+float getInnerFansSpeed() { 
+  return currentInnerPWMSpeed;
+}
+
 void setInnerFansSpeed(int percentage = -1) {
   String message = "[setInnerFansSpeed] ";
 
@@ -719,6 +737,8 @@ void setInnerFansSpeed(int percentage = -1) {
   percentage = constrain(percentage, 0, 100); // just to make sure
   int duty = map(percentage, 0, 100, 0, 255);
   ledcWrite(FAN_INNER_CHANNEL, duty);
+
+  currentInnerPWMSpeed = percentage;
 
   message += "Fan speed: " + String(percentage) + "% (duty " + String(duty) + ")";
   logMessage(message);
@@ -1503,6 +1523,7 @@ void setup() {
   otaManager.getDrippersAutoModeFunc = getDrippersAutoMode;
   otaManager.setDrippersAutoModeFunc = setDrippersAutoMode;
   otaManager.setInnerFansSpeedFunc = setInnerFansSpeed;
+  otaManager.getInnerFansSpeedFunc = getInnerFansSpeed;
   otaManager.begin();
   otaManager.sendAttribute("fw_version_actual", CURRENT_FIRMWARE_VERSION);
 

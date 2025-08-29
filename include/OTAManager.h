@@ -29,6 +29,7 @@ public:
   std::function<bool()> getDrippersAutoModeFunc;
   std::function<void(bool)> setDrippersAutoModeFunc;
   std::function<void(int)> setInnerFansSpeedFunc;
+  std::function<int()> getInnerFansSpeedFunc;
 
   OTAManager(PubSubClient &mqttClient, const String& fwVersion, const String& deviceToken)
     : m_mqttClient(mqttClient), m_fwVersion(fwVersion), m_token(deviceToken) {
@@ -197,6 +198,14 @@ public:
       int percentage = doc["params"] | 0;
       setInnerFansSpeedFunc(percentage);  
       Serial.printf("[RPC] Set inner fan speed to %i%\n", percentage);
+
+    } else if (method == "getInnerFansSpeed") {
+      float speed = getInnerFansSpeedFunc();
+
+      String response = String(speed);
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
+      Serial.printf("[RPC] Get inner fan speed: %d\n", speed);
     
     } else {
       Serial.println("[RPC] Unknown method.");
