@@ -31,7 +31,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.139";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.143";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
 //const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
@@ -144,31 +144,31 @@ std::vector<ScheduleEntry> modeSchedule = {
   // Sunday
   { 0,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 0,  6,  0, 19,  0, SystemMode::Cool },      
-  { 0, 22,  0, 23, 59, SystemMode::Regenerate },
+  { 0, 19,  0, 23, 59, SystemMode::Regenerate },
   // Monday 
   { 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 1,  6,  0, 19,  0, SystemMode::Cool },      
-  { 1, 22,  0, 23, 59, SystemMode::Regenerate },
+  { 1, 19,  0, 23, 59, SystemMode::Regenerate },
   // Tuesday 
   { 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 2,  6,  0, 19,  0, SystemMode::Cool },      
-  { 2, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  { 2, 19,  0, 23, 59, SystemMode::Regenerate }, 
   // Wednesday
   { 3,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 3,  6,  0, 19,  0, SystemMode::Cool },      
-  { 3, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  { 3, 19,  0, 23, 59, SystemMode::Regenerate }, 
   // Thursday
   { 4,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 4,  6,  0, 19,  0, SystemMode::Cool },      
-  { 4, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  { 4, 19,  0, 23, 59, SystemMode::Regenerate }, 
   // Friday
   { 5,  0,  0,  6,  0, SystemMode::Regenerate }, 
   { 5,  6,  0, 19,  0, SystemMode::Cool },      
-  { 5, 22,  0, 23, 59, SystemMode::Regenerate }, 
+  { 5, 19,  0, 23, 59, SystemMode::Regenerate }, 
   // Saturday
   { 6,  0,  0,  6,  0, SystemMode::Regenerate },
   { 6,  6,  0, 19,  0, SystemMode::Cool },
-  { 6, 22,  0, 23, 59, SystemMode::Regenerate } 
+  { 6, 19,  0, 23, 59, SystemMode::Regenerate } 
   // Add more days as needed
 };
 
@@ -219,6 +219,7 @@ void offDrippers();
 void offSprinklers();
 void startRegeneration();
 bool isRegenerationEffective();
+void updateRegenerationBudget();
 bool isTopOfHour();
 bool isSystemHealthy();
 
@@ -320,6 +321,7 @@ void logModeToS3(float value) {
                     "; PWM = " + (String)currentPWMSpeed +
                     "; Drippers Mode = " + (currentWaterMode == WateringMode::On ? "Open" : "Close") +
                     "; Drippers Actual = " + (currentDrippersMode == WateringMode::On ? "Open" : "Close") +
+                    "; Drippers Budget = " + (String(wateringBudget.getBudgetDurationMs() / 1000)) +
                     "; Sprinklers Mode = " + (desiredSprinklersMode == WateringMode::On ? "Open" : "Close") +
                     "; Sprinklers Actual = " + (currentSprinklersMode == WateringMode::On ? "Open" : "Close") +
                     "; Dampers = " + (currentAirMode == AirValveMode::Open ? "Open" : "Close");
@@ -629,6 +631,52 @@ bool isRegenerationEffective() {
   return isEffective;
 }
 
+// Helper function to update regeneration budget based on beforeRH
+void updateRegenerationBudget() {
+  float beforeRH = shtRS485Manager.getBeforeRH();
+  
+  if(isnan(beforeRH)) {
+    logMessage("[Regenerate] Before RH is not available, cannot update budget");
+    return;
+  }
+  
+  // Safety check for valid humidity values
+  if (beforeRH < 0 || beforeRH > 100) {
+    logMessage("[Regenerate] Invalid beforeRH value: " + String(beforeRH) + "%, cannot update budget");
+    return;
+  }
+  
+  unsigned long newBudgetMs = 0;
+  String budgetReason = "";
+  
+  if (beforeRH < 90.0) {
+    // Below 90%: constant 15 seconds
+    newBudgetMs = 15 * 1000;
+    budgetReason = "Below 90% RH - constant 15s budget";
+  } else if (beforeRH <= 95.0) {
+    // 90% to 95%: map from 15 seconds to 6 seconds
+    // Map 90% -> 15s, 95% -> 6s
+    float mappedSeconds = mapFloat(beforeRH, 90.0, 95.0, 15.0, 6.0);
+    newBudgetMs = (unsigned long)(mappedSeconds * 1000);
+    budgetReason = "90-95% RH - mapped budget: " + String(mappedSeconds, 1) + "s";
+  } else {
+    // Above 95%: stop drippers (0 budget)
+    newBudgetMs = 0;
+    budgetReason = "Above 95% RH - stopping drippers";
+  }
+  
+  // Only update if the budget has changed
+  if (wateringBudget.getBudgetDurationMs() != newBudgetMs) {
+    wateringBudget.setBudgetDurationMs(newBudgetMs);
+    
+    if (newBudgetMs > 0) {
+      logMessage("[Regenerate] Budget updated: " + String(newBudgetMs / 1000) + "s - " + budgetReason);
+    } else {
+      logMessage("[Regenerate] Drippers stopped - " + budgetReason);
+    }
+  }
+}
+
 // Helper function to start fresh regeneration
 void startRegeneration() {
   logMessage("[Regenerate] Starting fresh regeneration cycle");
@@ -645,12 +693,12 @@ void startRegeneration() {
     logMessage("[Regenerate] Warning: Some humidity sensors not available");
   }
   
-  // Set drippers budget to 15 seconds
-  wateringBudget.setBudgetDurationMs(15 * 1000);
-
-  // Set regeneration parameters: 80% fan speed, 15 seconds drippers budget, open dampers
+  // Set regeneration parameters: 80% fan speed, open dampers
   currentWaterMode = WateringMode::On;
   setSystemMode(AirValveMode::Open, 80, currentWaterMode);
+  
+  // Update drippers budget based on current beforeRH (will set appropriate budget)
+  updateRegenerationBudget();
   
   // Store the start time
   regenerationStartTime = millis();
@@ -658,7 +706,8 @@ void startRegeneration() {
   // Set system mode
   currentSystemMode = SystemMode::Regenerate;
   
-  logMessage("[Regenerate] Regeneration started - Fans: 80%, Drippers: 15s, Dampers: Open");
+  logMessage("[Regenerate] Regeneration started - Fans: 80%, Dampers: Open, Budget: " + 
+             String(wateringBudget.getBudgetDurationMs() / 1000) + "s");
 }
 
 void onRegenerate() {
@@ -685,7 +734,10 @@ void onRegenerate() {
     }
   }
   
-  // We're already regenerating, check if it's time to validate effectiveness
+  // We're already regenerating - update budget based on current beforeRH
+  updateRegenerationBudget();
+  
+  // Check if it's time to validate effectiveness
   if (regenerationStartTime > 0 && millis() - regenerationStartTime >= 10 * 60 * 1000) { // 10 minutes
     logMessage("[Regenerate] 10+ minutes passed, checking regeneration effectiveness");
     
@@ -918,6 +970,7 @@ void PrintSensors(){
                     "; PWM = " + (String)currentPWMSpeed +
                     "; Drippers Mode = " + (currentWaterMode == WateringMode::On ? "Open" : "Close") +
                     "; Drippers Actual = " + (currentDrippersMode == WateringMode::On ? "Open" : "Close") +
+                    "; Drippers Budget = " + (String(wateringBudget.getBudgetDurationMs() / 1000)) +
                     "; Sprinklers Mode = " + (desiredSprinklersMode == WateringMode::On ? "Open" : "Close") +
                     "; Sprinklers Actual = " + (currentSprinklersMode == WateringMode::On ? "Open" : "Close") +
                     "; Dampers = " + (currentAirMode == AirValveMode::Open ? "Open" : "Close");
@@ -940,6 +993,7 @@ void PrintSensors(){
    if (currentSystemMode == SystemMode::Regenerate && regenerationStartTime > 0) {
      unsigned long regenerationTime = (millis() - regenerationStartTime) / 1000; // in seconds
      Serial.println("Regeneration Status: Active for " + String(regenerationTime) + " seconds");
+     Serial.println("Regeneration Budget: " + String(wateringBudget.getBudgetDurationMs() / 1000) + "s");
      if (regenerationTime >= 600) { // 10 minutes
        Serial.println("Regeneration: Ready for effectiveness check");
      } else {
@@ -1084,11 +1138,11 @@ void sendTelemetry() {
 
   otaManager.sendTelemetry("System_Mode", SystemModeHelper::toString(currentSystemMode));
   otaManager.sendTelemetry("Fans_Speed", currentPWMSpeed);
-  otaManager.sendTelemetry("Water_Mode", currentWaterMode == WateringMode::On ? "On" : "Off");
+  otaManager.sendTelemetry("Water_Mode", currentWaterMode == WateringMode::On ? "Open" : "Close");
   otaManager.sendTelemetry("Drippers_Actual", currentDrippersMode == WateringMode::On ? "Open" : "Close");
   otaManager.sendTelemetry("Drippers_Slot", (int)(wateringBudget.getSlotDurationMs() / 1000));
   otaManager.sendTelemetry("Drippers_Budget", (int)(wateringBudget.getBudgetDurationMs() / 1000));
-  otaManager.sendTelemetry("Dampers_Status", currentAirMode == AirValveMode::Open ? "true" : "false");
+  otaManager.sendTelemetry("Dampers_Status", currentAirMode == AirValveMode::Open ? "Open" : "Close");
   otaManager.sendTelemetry("Dampers_Actual", currentAirMode == AirValveMode::Open ? "Open" : "Close");
   otaManager.sendTelemetry("Sprinklers_Mode", desiredSprinklersMode == WateringMode::On ? "Open" : "Close");
   otaManager.sendTelemetry("Sprinklers_Actual", currentSprinklersMode == WateringMode::On ? "Open" : "Close");
