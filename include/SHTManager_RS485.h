@@ -87,9 +87,9 @@ public:
                         } else {
                             _lastRH[_currentSensorIndex] = value;
                             _retryCount = 0; // Reset retry count on success
+                            // Update last read time only on successful read
+                            _lastReadMs[_currentSensorIndex] = now;
                         }
-                        // Update last read time
-                        _lastReadMs[_currentSensorIndex] = now;
 
                         _currentSensorIndex = (_currentSensorIndex + 1) % SENSOR_COUNT;
                         _status = ReadStatus::IDLE;
@@ -101,25 +101,26 @@ public:
 
     // Fill the sensor data (usealy for first time setup)
     void fillSensorData() {
+        unsigned long now = millis();
         for (int i = 0; i < SENSOR_COUNT; ++i) {
             _lastTemp[i] = readTemperature(static_cast<SensorIndex>(i));
             delay(30); // Small delay to avoid flooding the bus
             _lastRH[i] = readHumidity(static_cast<SensorIndex>(i));
             delay(30); // Small delay to avoid flooding the bus
-            _lastReadMs[i] = millis();
+            _lastReadMs[i] = now;
         }
     }
 
-    // Getters for cached data
-    float getAmbiantTemp() { return _lastTemp[AMBIANT]; }
-    float getBeforeTemp()  { return _lastTemp[BEFORE]; }
-    float getAfterTemp()   { return _lastTemp[AFTER]; }
-    float getRoomTemp()    { return _lastTemp[ROOM]; }
+    // Getters for cached data (with expiration check)
+    float getAmbiantTemp() { return isDataValid(AMBIANT) ? _lastTemp[AMBIANT] : NAN; }
+    float getBeforeTemp()  { return isDataValid(BEFORE) ? _lastTemp[BEFORE] : NAN; }
+    float getAfterTemp()   { return isDataValid(AFTER) ? _lastTemp[AFTER] : NAN; }
+    float getRoomTemp()    { return isDataValid(ROOM) ? _lastTemp[ROOM] : NAN; }
 
-    float getAmbiantRH()   { return _lastRH[AMBIANT]; }
-    float getBeforeRH()    { return _lastRH[BEFORE]; }
-    float getAfterRH()     { return _lastRH[AFTER]; }
-    float getRoomRH()      { return _lastRH[ROOM]; }
+    float getAmbiantRH()   { return isDataValid(AMBIANT) ? _lastRH[AMBIANT] : NAN; }
+    float getBeforeRH()    { return isDataValid(BEFORE) ? _lastRH[BEFORE] : NAN; }
+    float getAfterRH()     { return isDataValid(AFTER) ? _lastRH[AFTER] : NAN; }
+    float getRoomRH()      { return isDataValid(ROOM) ? _lastRH[ROOM] : NAN; }
 
     // Set Modbus address for each sensor (if you want to change from default)
     void setSensorAddr(SensorIndex idx, uint8_t addr) { _sensorAddr[idx] = addr; }
@@ -205,6 +206,9 @@ private:
     unsigned long _sensorReadIntervalMs[SENSOR_COUNT] = {
         60000, 60000, 60000, 60000, 60000  // Default: 60s per sensor
     };
+    
+    // ==== Data expiration ====
+    static constexpr unsigned long DATA_EXPIRY_MS = 300000; // 5 minutes - data expires after this time
 
     // ==== Read state machine ====
     enum class ReadType { TEMP, HUMID };
@@ -219,6 +223,13 @@ private:
     // ==== Modbus direction control ====
     static void preTransmission() { digitalWrite(RS485_DE_RE_PIN, HIGH); }
     static void postTransmission() { digitalWrite(RS485_DE_RE_PIN, LOW); }
+    
+    // ==== Data validation ====
+    bool isDataValid(SensorIndex idx) {
+        if (idx < 0 || idx >= SENSOR_COUNT) return false;
+        unsigned long now = millis();
+        return (now - _lastReadMs[idx]) < DATA_EXPIRY_MS;
+    }
 
     // ==== Read functions ====
     // Read humidity (returns %RH, float)

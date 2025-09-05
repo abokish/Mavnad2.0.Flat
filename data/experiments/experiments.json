@@ -1,0 +1,218 @@
+{
+  "experiments": [
+    {
+      "name": "fan_speed_test",
+      "description": "Testing fan speeds from 0% to 100% with constant water budget",
+      "start_date": "2025-09-02",
+      "start_time": "15:45",
+      "duration_hours": 1,
+      "log_interval_seconds": 120,
+      "steps": [
+        {
+          "time": "15:45",
+          "fan_speed": 0,
+          "inner_fan_speed": 0,
+          "water_budget": 0,
+          "dampers_open": false,
+          "description": "Baseline - all fans off"
+        },
+        {
+          "time": "15:50",
+          "fan_speed": 10,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Low fan speed test"
+        },
+        {
+          "time": "15:55",
+          "fan_speed": 20,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Medium-low fan speed"
+        },
+        {
+          "time": "16:00",
+          "fan_speed": 30,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Medium fan speed"
+        },
+        {
+          "time": "16:05",
+          "fan_speed": 40,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Medium-high fan speed"
+        },
+        {
+          "time": "16:10",
+          "fan_speed": 50,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Half fan speed"
+        },
+        {
+          "time": "16:15",
+          "fan_speed": 60,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "High fan speed"
+        },
+        {
+          "time": "16:20",
+          "fan_speed": 70,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Very high fan speed"
+        },
+        {
+          "time": "16:25",
+          "fan_speed": 80,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Near maximum fan speed"
+        },
+        {
+          "time": "16:30",
+          "fan_speed": 90,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Maximum fan speed"
+        },
+        {
+          "time": "16:35",
+          "fan_speed": 100,
+          "inner_fan_speed": 20,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Full fan speed"
+        }
+      ]
+    },
+    {
+      "name": "water_budget_test",
+      "description": "Testing different water budgets with constant fan speed",
+      "start_date": "2024-01-15",
+      "start_time": "15:30",
+      "duration_hours": 1,
+      "log_interval_seconds": 120,
+      "steps": [
+        {
+          "time": "00:00",
+          "fan_speed": 50,
+          "inner_fan_speed": 40,
+          "water_budget": 5,
+          "dampers_open": true,
+          "description": "Low water budget (5 seconds)"
+        },
+        {
+          "time": "00:10",
+          "fan_speed": 50,
+          "inner_fan_speed": 40,
+          "water_budget": 10,
+          "dampers_open": true,
+          "description": "Medium-low water budget (10 seconds)"
+        },
+        {
+          "time": "00:20",
+          "fan_speed": 50,
+          "inner_fan_speed": 40,
+          "water_budget": 15,
+          "dampers_open": true,
+          "description": "Medium water budget (15 seconds)"
+        },
+        {
+          "time": "00:30",
+          "fan_speed": 50,
+          "inner_fan_speed": 40,
+          "water_budget": 20,
+          "dampers_open": true,
+          "description": "Medium-high water budget (20 seconds)"
+        },
+        {
+          "time": "00:40",
+          "fan_speed": 50,
+          "inner_fan_speed": 40,
+          "water_budget": 30,
+          "dampers_open": true,
+          "description": "High water budget (30 seconds)"
+        },
+        {
+          "time": "00:50",
+          "fan_speed": 50,
+          "inner_fan_speed": 40,
+          "water_budget": 45,
+          "dampers_open": true,
+          "description": "Very high water budget (45 seconds)"
+        }
+      ]
+    },
+    {
+      "name": "combined_test",
+      "description": "Testing combination of fan speeds and water budgets",
+      "start_date": "2024-01-15",
+      "start_time": "17:00",
+      "duration_hours": 1,
+      "log_interval_seconds": 120,
+      "steps": [
+        {
+          "time": "00:00",
+          "fan_speed": 30,
+          "inner_fan_speed": 30,
+          "water_budget": 10,
+          "dampers_open": false,
+          "description": "Low settings, dampers closed"
+        },
+        {
+          "time": "00:10",
+          "fan_speed": 50,
+          "inner_fan_speed": 40,
+          "water_budget": 20,
+          "dampers_open": true,
+          "description": "Medium settings, dampers open"
+        },
+        {
+          "time": "00:20",
+          "fan_speed": 70,
+          "inner_fan_speed": 50,
+          "water_budget": 15,
+          "dampers_open": false,
+          "description": "High fans, medium water, dampers closed"
+        },
+        {
+          "time": "00:30",
+          "fan_speed": 80,
+          "inner_fan_speed": 60,
+          "water_budget": 25,
+          "dampers_open": true,
+          "description": "High settings, dampers open"
+        },
+        {
+          "time": "00:40",
+          "fan_speed": 40,
+          "inner_fan_speed": 35,
+          "water_budget": 30,
+          "dampers_open": true,
+          "description": "Balanced settings"
+        },
+        {
+          "time": "00:50",
+          "fan_speed": 60,
+          "inner_fan_speed": 45,
+          "water_budget": 12,
+          "dampers_open": false,
+          "description": "Final test configuration"
+        }
+      ]
+    }
+  ]
+}

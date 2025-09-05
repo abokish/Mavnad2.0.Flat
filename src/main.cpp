@@ -13,6 +13,10 @@
 #include "esp_ota_ops.h"
 #include "TimeBudgetManager.h"
 #include "RTClib.h"
+#include <ArduinoJson.h>
+#include "ExperimentManager.h"
+#include "ScheduleManager.h"
+#include "SystemTypes.h"
 
 // ===========================
 // Wifi credentials
@@ -31,7 +35,7 @@ const String BUILDING_NAME = "Mavnad2.0";
 const String CONTROLLER_TYPE = "Mavnad2.0.Flat";
 const String CONTROLLER_LOCATION = "mavnad";
 const float FLOAT_NAN = -127;
-const String CURRENT_FIRMWARE_VERSION = "1.0.2.143";
+const String CURRENT_FIRMWARE_VERSION = "1.0.2.170";
 const String TOKEN = "pm8z4oxs7awwcx68gwov"; // ein shemer
 //const String TOKEN = "8sqfmy0fdvacex3ef0mo"; // asaf
 
@@ -59,9 +63,9 @@ const int FAN_FREQUENCY = 20000; // PWM frequency in Hz
 const int FAN_RESOLUTION = 8;  // 8-bit resolution (0-255)
 
 const int PIN_PUMP_DRIPPERS = 13;
-const int PIN_DAMPER = 12;
+const int PIN_DAMPER = 14; // 12;  <============================= Changed to unused pin for safety
 const int PIN_DAMPER_POWER = 11;
-const int PIN_PUMP_SPRINKLERS = 3; //10;
+const int PIN_PUMP_SPRINKLERS = 10; 
 
 const int PUMP_PWM_CHANNEL = 1;
 const int PUMP_PWM_FREQ = 1000;     // 1 kHz (safe value within 100–2000 Hz)
@@ -106,71 +110,75 @@ bool isFirstBootAfterOTA = false;
 unsigned long lastLoopTime = 0;
 const unsigned long MAX_LOOP_TIME = 10 * 1000;  // 10 seconds max loop time
 
-// Define the AirValveMode enum
-enum AirValveMode {
-  Close,
-  Open
-};
 enum class DamperState {
   Idle,
   Opening,
   Closing
 };
 
-// Define the possible statuses of the system
-enum SystemMode {
-  Regenerate,
-  Heat,
-  Cool,
-  Stop,
-  Manual
-};
 
-enum WateringMode {
-  Off,
-  On
-};
-
-struct ScheduleEntry {
-  uint8_t dayOfWeek;  // 0 = Sunday, 1 = Monday, ... 6 = Saturday
-  uint8_t startHour;  // 24h format
-  uint8_t startMin;
-  uint8_t endHour;
-  uint8_t endMin;
-  SystemMode mode;
-};
-
-std::vector<ScheduleEntry> modeSchedule = {
+std::vector<ScheduleManager::ScheduleEntry> modeSchedule = {
+  // startHour, min, endHour, min, mode, startFan%, endFan%, innerFan%, drippersBudgetSeconds
   // Sunday
-  { 0,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 0,  6,  0, 19,  0, SystemMode::Cool },      
-  { 0, 19,  0, 23, 59, SystemMode::Regenerate },
+  { 0,  0,  0,  6,  0, SystemMode::Regenerate, 35, 25, 20, 30 },      // 00:00-06:00: Fan 35-25%, Inner 30%, Drippers 0s
+  { 0,  6,  0,  6, 20, SystemMode::Regenerate, 25, 25, 0, 30 },      // 06:00-06:20: Fan 25%, Inner 30%, Drippers 0s
+  { 0,  6, 20,  7, 30, SystemMode::Stop, 0, 0, 0, 0 },               // 06:20-07:30: Stop mode
+  { 0,  7, 30, 16,  0, SystemMode::Cool, 20, 40, 30, 25 },           // 07:30-16:00: Fan 20-40%, Inner 20%, Drippers 25s
+  { 0, 16,  0, 20,  0, SystemMode::Cool, 40, 20, 30, 25 },           // 16:00-20:00: Fan 40-20%, Inner 20%, Drippers 25s
+  { 0, 20,  0, 21,  0, SystemMode::Regenerate, 50, 50, 20, 30 },      // 20:00-21:00: Fan 50%, Inner 30%, Drippers 0s
+  { 0, 21,  0, 23, 59, SystemMode::Regenerate, 50, 35, 20, 30 },     // 21:00-23:59: Fan 50-35%, Inner 30%, Drippers 0s
   // Monday 
-  { 1,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 1,  6,  0, 19,  0, SystemMode::Cool },      
-  { 1, 19,  0, 23, 59, SystemMode::Regenerate },
+  { 1,  0,  0,  6,  0, SystemMode::Regenerate, 35, 25, 20, 30 },      // 00:00-06:00: Fan 35-25%, Inner 30%, Drippers 0s
+  { 1,  6,  0,  6, 20, SystemMode::Regenerate, 25, 25, 0, 30 },      // 06:00-06:20: Fan 25%, Inner 30%, Drippers 0s
+  { 1,  6, 20,  7, 30, SystemMode::Stop, 0, 0, 0, 0 },               // 06:20-07:30: Stop mode
+  { 1,  7, 30, 16,  0, SystemMode::Cool, 20, 40, 30, 25 },           // 07:30-16:00: Fan 20-40%, Inner 20%, Drippers 25s
+  { 1, 16,  0, 20,  0, SystemMode::Cool, 40, 20, 30, 25 },           // 16:00-20:00: Fan 40-20%, Inner 20%, Drippers 25s
+  { 1, 20,  0, 21,  0, SystemMode::Regenerate, 50, 50, 20, 30 },      // 20:00-21:00: Fan 50%, Inner 30%, Drippers 0s
+  { 1, 21,  0, 23, 59, SystemMode::Regenerate, 50, 35, 20, 30 },     // 21:00-23:59: Fan 50-35%, Inner 30%, Drippers 0s
   // Tuesday 
-  { 2,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 2,  6,  0, 19,  0, SystemMode::Cool },      
-  { 2, 19,  0, 23, 59, SystemMode::Regenerate }, 
+  { 2,  0,  0,  6,  0, SystemMode::Regenerate, 35, 25, 20, 30 },      // 00:00-06:00: Fan 35-25%, Inner 30%, Drippers 0s
+  { 2,  6,  0,  6, 20, SystemMode::Regenerate, 25, 25, 0, 30 },      // 06:00-06:20: Fan 25%, Inner 30%, Drippers 0s
+  { 2,  6, 20,  7, 30, SystemMode::Stop, 0, 0, 0, 0 },               // 06:20-07:30: Stop mode
+  { 2,  7, 30, 16,  0, SystemMode::Cool, 20, 40, 30, 25 },           // 07:30-16:00: Fan 20-40%, Inner 20%, Drippers 25s
+  { 2, 16,  0, 20,  0, SystemMode::Cool, 40, 20, 30, 25 },           // 16:00-20:00: Fan 40-20%, Inner 20%, Drippers 25s
+  { 2, 20,  0, 21,  0, SystemMode::Regenerate, 50, 50, 20, 30 },      // 20:00-21:00: Fan 50%, Inner 30%, Drippers 0s
+  { 2, 21,  0, 23, 59, SystemMode::Regenerate, 50, 35, 20, 30 },     // 21:00-23:59: Fan 50-35%, Inner 30%, Drippers 0s
   // Wednesday
-  { 3,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 3,  6,  0, 19,  0, SystemMode::Cool },      
-  { 3, 19,  0, 23, 59, SystemMode::Regenerate }, 
+  { 3,  0,  0,  6,  0, SystemMode::Regenerate, 35, 25, 20, 30 },      // 00:00-06:00: Fan 35-25%, Inner 30%, Drippers 0s
+  { 3,  6,  0,  6, 20, SystemMode::Regenerate, 25, 25, 0, 30 },      // 06:00-06:20: Fan 25%, Inner 30%, Drippers 0s
+  { 3,  6, 20,  7, 30, SystemMode::Stop, 0, 0, 0, 0 },               // 06:20-07:30: Stop mode
+  { 3,  7, 30, 16,  0, SystemMode::Cool, 20, 40, 30, 25 },           // 07:30-16:00: Fan 20-40%, Inner 20%, Drippers 25s
+  { 3, 16,  0, 20,  0, SystemMode::Cool, 40, 20, 30, 25 },           // 16:00-20:00: Fan 40-20%, Inner 20%, Drippers 25s
+  { 3, 20,  0, 21,  0, SystemMode::Regenerate, 50, 50, 20, 30 },      // 20:00-21:00: Fan 50%, Inner 30%, Drippers 0s
+  { 3, 21,  0, 23, 59, SystemMode::Regenerate, 50, 35, 20, 30 },     // 21:00-23:59: Fan 50-35%, Inner 30%, Drippers 0s
   // Thursday
-  { 4,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 4,  6,  0, 19,  0, SystemMode::Cool },      
-  { 4, 19,  0, 23, 59, SystemMode::Regenerate }, 
+  { 4,  0,  0,  6,  0, SystemMode::Regenerate, 35, 25, 20, 30 },      // 00:00-06:00: Fan 35-25%, Inner 30%, Drippers 0s
+  { 4,  6,  0,  6, 20, SystemMode::Regenerate, 25, 25, 0, 30 },      // 06:00-06:20: Fan 25%, Inner 30%, Drippers 0s
+  { 4,  6, 20,  7, 30, SystemMode::Stop, 0, 0, 0, 0 },               // 06:20-07:30: Stop mode
+  { 4,  7, 30, 16,  0, SystemMode::Cool, 20, 40, 30, 25 },           // 07:30-16:00: Fan 20-40%, Inner 20%, Drippers 25s
+  { 4, 16,  0, 20,  0, SystemMode::Cool, 40, 20, 30, 25 },           // 16:00-20:00: Fan 40-20%, Inner 20%, Drippers 25s
+  { 4, 20,  0, 21,  0, SystemMode::Regenerate, 50, 50, 20, 30 },      // 20:00-21:00: Fan 50%, Inner 30%, Drippers 0s
+  { 4, 21,  0, 23, 59, SystemMode::Regenerate, 50, 35, 20, 30 },     // 21:00-23:59: Fan 50-35%, Inner 30%, Drippers 0s
   // Friday
-  { 5,  0,  0,  6,  0, SystemMode::Regenerate }, 
-  { 5,  6,  0, 19,  0, SystemMode::Cool },      
-  { 5, 19,  0, 23, 59, SystemMode::Regenerate }, 
+  { 5,  0,  0,  6,  0, SystemMode::Regenerate, 35, 25, 20, 30 },      // 00:00-06:00: Fan 35-25%, Inner 30%, Drippers 0s
+  { 5,  6,  0,  6, 20, SystemMode::Regenerate, 25, 25, 0, 30 },      // 06:00-06:20: Fan 25%, Inner 30%, Drippers 0s
+  { 5,  6, 20,  7, 30, SystemMode::Stop, 0, 0, 0, 0 },               // 06:20-07:30: Stop mode
+  { 5,  7, 30, 16,  0, SystemMode::Cool, 20, 40, 30, 25 },           // 07:30-16:00: Fan 20-40%, Inner 20%, Drippers 25s
+  { 5, 16,  0, 20,  0, SystemMode::Cool, 40, 20, 30, 25 },           // 16:00-20:00: Fan 40-20%, Inner 20%, Drippers 25s
+  { 5, 20,  0, 21,  0, SystemMode::Regenerate, 50, 50, 20, 30 },      // 20:00-21:00: Fan 50%, Inner 30%, Drippers 0s
+  { 5, 21,  0, 23, 59, SystemMode::Regenerate, 50, 35, 20, 30 },     // 21:00-23:59: Fan 50-35%, Inner 30%, Drippers 0s
   // Saturday
-  { 6,  0,  0,  6,  0, SystemMode::Regenerate },
-  { 6,  6,  0, 19,  0, SystemMode::Cool },
-  { 6, 19,  0, 23, 59, SystemMode::Regenerate } 
-  // Add more days as needed
+  { 6,  0,  0,  6,  0, SystemMode::Regenerate, 35, 25, 20, 30 },      // 00:00-06:00: Fan 35-25%, Inner 30%, Drippers 0s
+  { 6,  6,  0,  6, 20, SystemMode::Regenerate, 25, 25, 0, 30 },      // 06:00-06:20: Fan 25%, Inner 30%, Drippers 0s
+  { 6,  6, 20,  7, 30, SystemMode::Stop, 0, 0, 0, 0 },               // 06:20-07:30: Stop mode
+  { 6,  7, 30, 16,  0, SystemMode::Cool, 20, 40, 30, 25 },           // 07:30-16:00: Fan 20-40%, Inner 20%, Drippers 25s
+  { 6, 16,  0, 20,  0, SystemMode::Cool, 40, 20, 30, 25 },           // 16:00-20:00: Fan 40-20%, Inner 20%, Drippers 25s
+  { 6, 20,  0, 21,  0, SystemMode::Regenerate, 50, 50, 20, 30 },      // 20:00-21:00: Fan 50%, Inner 30%, Drippers 0s
+  { 6, 21,  0, 23, 59, SystemMode::Regenerate, 50, 35, 20, 30 }      // 21:00-23:59: Fan 50-35%, Inner 30%, Drippers 0s
 };
+
+// Global ScheduleManager instance
+ScheduleManager* scheduleManager = nullptr;
 
 struct SystemModeHelper {
   static String toString(SystemMode mode) {
@@ -180,6 +188,7 @@ struct SystemModeHelper {
       case SystemMode::Regenerate: return "Regenerate";
       case SystemMode::Stop:      return "Stop";
       case SystemMode::Manual:      return "Manual";
+      case SystemMode::Experiment:  return "Experiment";
       default:                       return "Unknown";
     }
   }
@@ -189,6 +198,7 @@ struct SystemModeHelper {
     if (str.equalsIgnoreCase("Heat"))      return SystemMode::Heat;
     if (str.equalsIgnoreCase("Regenerate")) return SystemMode::Regenerate;
     if (str.equalsIgnoreCase("Stop"))      return SystemMode::Stop;
+    if (str.equalsIgnoreCase("Experiment")) return SystemMode::Experiment;
 
     Serial.printf("[SystemModeHelper] Unknown mode string: %s\n", str.c_str());
     return SystemMode::Stop;  // fallback
@@ -211,21 +221,27 @@ float lastAfterHumidity = NAN; // Last valid humidity reading
 bool debugMode = false;
 unsigned long damperActionStartTime = 0;
 const unsigned long DAMPER_ACTION_DURATION_MS = 15 * 1000;
-unsigned long regenerationStartTime = 0; // When the current regeneration cycle started
-bool canStartRegeneration = true; // Track if we can start regeneration in this slot - true for first time in slot
 RTC_DS3231 rtc;
 
+// Forward declarations
 void offDrippers();
 void offSprinklers();
-void startRegeneration();
-bool isRegenerationEffective();
 void updateRegenerationBudget();
 bool isTopOfHour();
 bool isSystemHealthy();
+void onFans(int percentage);
+void onInnerFans(int speedPercentage);
+void offFans();
+void setWater(WateringMode mode);
+void setDampers(AirValveMode mode);
+void restartDevice();
+void onHeat();
+void setSystemMode(AirValveMode airMode, int fanPercentage, WateringMode wateringMode, int innerFanSpeed, int drippersBudgetSeconds);
+void updateSystemMode();
 
 // Define TimeBudgetManager instances for watering and sprinklers
 TimeBudgetManager wateringBudget(1L * 60 * 1000, 0.25L * 60 * 1000, offDrippers);
-TimeBudgetManager sprinklersBudget(4L * 60 * 1000, 0.166L * 60 * 1000, offSprinklers);
+TimeBudgetManager sprinklersBudget(10L * 60 * 1000, 0.166L * 60 * 1000, offSprinklers);
 
 // Define a struct for relay configuration
 struct Relay {
@@ -282,17 +298,18 @@ void logToS3(const String& sensorName, const String& sensorType, const String& s
 }
 
 int getSystemStatusCode() {
-  // System state value has 3 digits:
-  // First one is the system mode: 1 = cooling; 2 = heating; 3 = regenerating; 0 = off
+  // System state value has 4 digits:
+  // First digit is the system mode: 1 = cooling; 2 = heating; 3 = regenerating; 4 = manual; 5 = experiment; 0 = off
   // Second digit is fans speed: 1 = low; 2 = medium; 3 = high speed; 0 = fans are closed
   // Third digit is the water status: 1 = open; 0 = close
   // Fourth digit is the dampers status: 1 = open; 0 = close
-  // The sing (negative or possitive number) is: > = outtake; < 0 = intake (reverse)
+  // The sign (negative or positive number) is: > = outtake; < 0 = intake (reverse)
   int status = 0; // first digit - operating mode
   if(currentSystemMode == SystemMode::Cool) status = 1;
   else if(currentSystemMode == SystemMode::Heat) status = 2;
   else if(currentSystemMode == SystemMode::Regenerate) status = 3;
   else if(currentSystemMode == SystemMode::Manual) status = 4;
+  else if(currentSystemMode == SystemMode::Experiment) status = 5;
 
   status *= 10; // second digit - speed (convert precenteg to a number between 0 to 3)
   status += map(currentPWMSpeed, 0, 100, 0, 3);
@@ -313,22 +330,19 @@ void logMessage(const String& msg) {
   otaManager.sendTelemetry("log", msg);
 }
 
-void logModeToS3(float value) {
-    logToS3("System", "system", "cooler", "mode", value); // "mode" must be in location "cooler"
+void logMode() {
+  logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // "mode" must be in location "cooler"
 
-    String message = "System mode code " + (String)getSystemStatusCode() +
-                   "; Mode = " + SystemModeHelper::toString(currentSystemMode) +
-                    "; PWM = " + (String)currentPWMSpeed +
-                    "; Drippers Mode = " + (currentWaterMode == WateringMode::On ? "Open" : "Close") +
-                    "; Drippers Actual = " + (currentDrippersMode == WateringMode::On ? "Open" : "Close") +
-                    "; Drippers Budget = " + (String(wateringBudget.getBudgetDurationMs() / 1000)) +
-                    "; Sprinklers Mode = " + (desiredSprinklersMode == WateringMode::On ? "Open" : "Close") +
-                    "; Sprinklers Actual = " + (currentSprinklersMode == WateringMode::On ? "Open" : "Close") +
-                    "; Dampers = " + (currentAirMode == AirValveMode::Open ? "Open" : "Close");
-  logMessage(message);
+  otaManager.sendTelemetry("System_Status_Code", String(getSystemStatusCode()));
+  otaManager.sendTelemetry("System_Mode", SystemModeHelper::toString(currentSystemMode));
+  otaManager.sendTelemetry("Fans_Speed", currentPWMSpeed);
+  otaManager.sendTelemetry("Water_Mode", currentWaterMode == WateringMode::On ? "Open" : "Close");
+  otaManager.sendTelemetry("Dampers_Status", currentAirMode == AirValveMode::Open ? "Open" : "Close");
+  otaManager.sendTelemetry("Drippers_Budget", (int)(wateringBudget.getBudgetDurationMs() / 1000));
+  otaManager.sendTelemetry("Sprinklers_Budget", (int)(sprinklersBudget.getBudgetDurationMs() / 1000));
 }
 
-void onFans(int percentage = 70) {
+void onFans(int percentage) {
   if(currentPWMSpeed == percentage) return;
 
   String message = "[Fans] current pwm = " + (String)currentPWMSpeed + "; new = " + (String)percentage + "\n";
@@ -336,7 +350,7 @@ void onFans(int percentage = 70) {
   int duty = map(percentage, 0, 100, 0, 255);
   ledcWrite(FAN_CHANNEL, duty);
   currentPWMSpeed = percentage;
-  logModeToS3(getSystemStatusCode());
+  logMode();
 }
 
 void offFans() {
@@ -345,11 +359,12 @@ void offFans() {
   logMessage("[Fans] off");
   ledcWrite(FAN_CHANNEL, 0);
   currentPWMSpeed = 0;
-  logModeToS3(getSystemStatusCode());
+  logMode();
 }
 
 void onDampers() {
   debugMessage("on dampers");
+  return; // disable dampers for safety
   if(currentAirMode == AirValveMode::Open) return;
   desiredDamperState = AirValveMode::Open; // set the desired state to open
   if (damperState  != DamperState::Idle) return; // Already busy
@@ -397,7 +412,7 @@ void tickDampers() {
     }
 
     damperState = DamperState::Idle;
-    logModeToS3(getSystemStatusCode());
+    logMode();
 
     // the action has finished, check if the desired state is different from the actual state
     if(desiredDamperState != currentAirMode) {
@@ -415,27 +430,28 @@ void offSprinklers() {
   debugMessage("off sprinklers");
   if(currentSprinklersMode != WateringMode::Off) 
     logMessage("[Sprinklers] off"); // printing only once, when changing state from on to off
+  else return; // already off
   
   digitalWrite(PIN_PUMP_SPRINKLERS, LOW);
   
   currentSprinklersMode = WateringMode::Off;
-  logModeToS3(getSystemStatusCode());
+  logMode();
 }
 
 void onSprinklers() {
-  // debugMessage("on sprinklers");
-  // if (!sprinklersBudget.isAllowed()) {
-  //   offSprinklers();
-  //   return;
-  // }
+  debugMessage("on sprinklers");
+  if (!sprinklersBudget.isAllowed()) {
+    offSprinklers();
+    return;
+  }
 
-  // if(currentSprinklersMode == WateringMode::On) return;
-  // logMessage("[Sprinklers] on");
+  if(currentSprinklersMode == WateringMode::On) return;
+  logMessage("[Sprinklers] on");
   
-  // digitalWrite(PIN_PUMP_SPRINKLERS, HIGH);
+  digitalWrite(PIN_PUMP_SPRINKLERS, HIGH);
   
-  // currentSprinklersMode = WateringMode::On;
-  // logModeToS3(getSystemStatusCode());
+  currentSprinklersMode = WateringMode::On;
+  logMode();
 }
 
 void setDrippersPumpSpeed(int percent) {
@@ -456,7 +472,7 @@ void offDrippers() {
   setDrippersPumpSpeed(0);
 
   currentDrippersMode = WateringMode::Off;
-  logModeToS3(getSystemStatusCode());
+  logMode();
 }
 
 void onDrippers(int pumpPowerPercentage = 30) {
@@ -472,7 +488,7 @@ void onDrippers(int pumpPowerPercentage = 30) {
   setDrippersPumpSpeed(pumpPowerPercentage);
 
   currentDrippersMode = WateringMode::On;
-  logModeToS3(getSystemStatusCode());
+  logMode();
 }
 
 void off() {
@@ -484,6 +500,7 @@ void off() {
   offFans();
   offDampers();
 
+  currentWaterMode = WateringMode::Off;
   currentSystemMode = SystemMode::Stop;
 }
 
@@ -522,67 +539,92 @@ AirValveMode getAirModeByRoom() {
   debugMessage("get air mode by room");
   AirValveMode airMode = currentAirMode;
   float roomRH = shtRS485Manager.getRoomRH();
-  if(isnan(roomRH)) return airMode;
+  if(isnan(roomRH)) {
+    // Use fallback when humidity sensor is not available
+    logMessage("[getAirModeByRoom] Room RH not available, using fallback value: 50%");
+    roomRH = 50.0; // Use 50% as fallback - safe middle ground
+  }
 
   if(currentAirMode == AirValveMode::Open && roomRH > 70) airMode = AirValveMode::Close;
   if(currentAirMode == AirValveMode::Close && roomRH <= 60) airMode = AirValveMode::Open;
   return airMode;
 }
 
-void setSystemMode(AirValveMode airMode, int fanPercentage = 70, WateringMode wateringMode = WateringMode::Off) {
+void setSystemMode(AirValveMode airMode, int fanPercentage, WateringMode wateringMode, int innerFanSpeed, int drippersBudgetSeconds) {
   debugMessage("set system mode");
+  currentWaterMode = wateringMode;
   setWater(wateringMode);
   onFans(fanPercentage);
   setDampers(airMode);
+
+  // Handle inner fan speed if specified (>= 0)
+  if (innerFanSpeed >= 0) {
+    onInnerFans(innerFanSpeed);
+  }
+  
+  // Set water budget for drippers
+  wateringBudget.setBudgetDurationMs(drippersBudgetSeconds * 1000);
 }
 
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
+// Helper function to find current regeneration schedule entry and calculate fan speed
+int getCurrentRegenerationFanSpeed() {
+  if (!scheduleManager) {
+    logMessage("[getCurrentRegenerationFanSpeed] ScheduleManager not available, using default fan speed");
+    return 60; // Default fallback speed
+  }
+  
+  // Get current schedule entry
+  const ScheduleManager::ScheduleEntry* entry = scheduleManager->getCurrentEntry();
+  if (!entry) {
+    logMessage("[getCurrentRegenerationFanSpeed] No schedule entry found, using default fan speed");
+    return 60; // Default fallback speed
+  }
+  
+  // Check if current entry is regeneration mode
+  if (entry->mode != SystemMode::Regenerate) {
+    logMessage("[getCurrentRegenerationFanSpeed] Current mode is not regeneration, using default fan speed");
+    return 60; // Default fallback speed
+  }
+  
+  // Calculate fan speed for this entry
+  return scheduleManager->calculateFanSpeedForEntry(*entry);
+}
+
+
+// Helper function to get current schedule information for debugging
+String getCurrentScheduleInfo() {
+  if (!scheduleManager) {
+    return "ScheduleManager not available";
+  }
+  
+  // Get current time for display
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return "Failed to get local time";
+  }
+  
+  String info = "Current time: " + String(timeinfo.tm_hour) + ":" + 
+                String(timeinfo.tm_min < 10 ? "0" : "") + String(timeinfo.tm_min) + 
+                " (Day " + String(timeinfo.tm_wday) + ")\n";
+  
+  // Use ScheduleManager to get current schedule info
+  info += scheduleManager->getCurrentScheduleInfo();
+  
+  return info;
+}
+
 void setWaterBudgetFromPwm(int pwm) {
   // Set the watering budget based on the fan speed
   pwm = constrain(pwm, 0, 100); // Ensure pwm is within 0-100%
-  int budgetTime = map(pwm, 0, 100, 0, 15);     // seconds 0..15
+  int budgetTime = map(pwm, 20, 60, 15, 35);     // seconds 0..15
   logMessage("[setWaterBudgetFromPwm] Setting watering budget to " + String(budgetTime) + " seconds");
   wateringBudget.setBudgetDurationMs((unsigned long)budgetTime * 1000UL);
 }
 
-void onCool() {
-  debugMessage("on cool");
-  float roomTemp = shtRS485Manager.getRoomTemp();
-  if(isnan(roomTemp)) roomTemp = START_COOLING_DEG; // If room temperature is not available, use the default value
-  if(roomTemp < START_COOLING_DEG) {off(); return;} // It's too cold to start cooling
-
-  // Select DAMPERS mode based on room temperature
-  AirValveMode airMode = getAirModeByRoom();
-
-  // Select FANS speed based on room temperature
-  float pwmPercentage = mapFloat(roomTemp, 25.0, 29.0, 20.0, 70.0);
-  pwmPercentage = max(20.0f, min(70.0f, pwmPercentage)); // clamp the value
-
-  // As long as the before RH is under 95%, we can add water
-  float beforeRH = shtRS485Manager.getBeforeRH();
-  if(!isnan(beforeRH)) {
-    if(beforeRH < 95) {
-      currentWaterMode = WateringMode::On; 
-    } else {
-      currentWaterMode = WateringMode::Off;
-    }
-  }
-
-  if(currentWaterMode == WateringMode::On) {
-    // Set the water budget - 10-40 seconds depending on fan speed 
-    setWaterBudgetFromPwm((int)pwmPercentage);
-  } 
-  else {
-    wateringBudget.setBudgetDurationMs(0); // No budget if water is off
-  }
-
-  setSystemMode(airMode, (int)pwmPercentage, currentWaterMode);
-
-  currentSystemMode = SystemMode::Cool;
-}
 
 
 
@@ -596,54 +638,21 @@ bool isTopOfHour() {
   return timeinfo.tm_min == 0;
 }
 
-// Helper function to check if regeneration is effective
-bool isRegenerationEffective() {
-  float beforeRH = shtRS485Manager.getBeforeRH();
-  float afterRH = shtRS485Manager.getAfterRH();
-  
-  if(isnan(beforeRH)) {
-    logMessage("[Regenerate] Before RH is not available, cannot validate effectiveness");
-    return false;
-  }
-  
-  if(isnan(afterRH)) {
-    logMessage("[Regenerate] After RH is not available, cannot validate effectiveness");
-    return false;
-  }
-  
-  // Additional safety checks
-  if (beforeRH < 0 || afterRH < 0 || beforeRH > 100 || afterRH > 100) {
-    logMessage("[Regenerate] Invalid humidity values - Before RH: " + String(beforeRH) + 
-               "%, After RH: " + String(afterRH) + "%");
-    return false;
-  }
-  
-  // Check if after RH is at least 10% lower than before RH
-  // Example: if beforeRH = 60%, then threshold = 54% (60 * 0.9)
-  // Regeneration is effective if afterRH <= 54% (meaning humidity was added)
-  float threshold = beforeRH * 0.95f; // 10% relative threshold
-  bool isEffective = threshold >= afterRH;
-  
-  logMessage("[Regenerate] Effectiveness check - Before RH: " + String(beforeRH, 1) + 
-             "%, After RH: " + String(afterRH, 1) + "%, Threshold: " + String(threshold, 1) + 
-             "%, Effective: " + String(isEffective ? "YES" : "NO"));
-  
-  return isEffective;
-}
 
 // Helper function to update regeneration budget based on beforeRH
 void updateRegenerationBudget() {
   float beforeRH = shtRS485Manager.getBeforeRH();
   
+  // Fallback value when sensor is not available
   if(isnan(beforeRH)) {
-    logMessage("[Regenerate] Before RH is not available, cannot update budget");
-    return;
+    logMessage("[Regenerate] Before RH is not available, using fallback value: 50%");
+    beforeRH = 50.0; // Use 50% as fallback - safe middle ground
   }
   
   // Safety check for valid humidity values
   if (beforeRH < 0 || beforeRH > 100) {
-    logMessage("[Regenerate] Invalid beforeRH value: " + String(beforeRH) + "%, cannot update budget");
-    return;
+    logMessage("[Regenerate] Invalid beforeRH value: " + String(beforeRH) + "%, using fallback value: 50%");
+    beforeRH = 50.0; // Use 50% as fallback
   }
   
   unsigned long newBudgetMs = 0;
@@ -651,12 +660,12 @@ void updateRegenerationBudget() {
   
   if (beforeRH < 90.0) {
     // Below 90%: constant 15 seconds
-    newBudgetMs = 15 * 1000;
-    budgetReason = "Below 90% RH - constant 15s budget";
+    newBudgetMs = 25 * 1000;
+    budgetReason = "Below 90% RH - constant 25s budget";
   } else if (beforeRH <= 95.0) {
     // 90% to 95%: map from 15 seconds to 6 seconds
     // Map 90% -> 15s, 95% -> 6s
-    float mappedSeconds = mapFloat(beforeRH, 90.0, 95.0, 15.0, 6.0);
+    float mappedSeconds = mapFloat(beforeRH, 90.0, 95.0, 20.0, 10.0);
     newBudgetMs = (unsigned long)(mappedSeconds * 1000);
     budgetReason = "90-95% RH - mapped budget: " + String(mappedSeconds, 1) + "s";
   } else {
@@ -677,85 +686,7 @@ void updateRegenerationBudget() {
   }
 }
 
-// Helper function to start fresh regeneration
-void startRegeneration() {
-  logMessage("[Regenerate] Starting fresh regeneration cycle");
-  
-  // Log current humidity values for reference
-  float beforeRH = shtRS485Manager.getBeforeRH();
-  float afterRH = shtRS485Manager.getAfterRH();
-  float ambiantRH = shtRS485Manager.getAmbiantRH();
-  
-  if (!isnan(beforeRH) && !isnan(afterRH) && !isnan(ambiantRH)) {
-    logMessage("[Regenerate] Starting with - Before RH: " + String(beforeRH, 1) + 
-               "%, After RH: " + String(afterRH, 1) + "%, Ambiant RH: " + String(ambiantRH, 1) + "%");
-  } else {
-    logMessage("[Regenerate] Warning: Some humidity sensors not available");
-  }
-  
-  // Set regeneration parameters: 80% fan speed, open dampers
-  currentWaterMode = WateringMode::On;
-  setSystemMode(AirValveMode::Open, 80, currentWaterMode);
-  
-  // Update drippers budget based on current beforeRH (will set appropriate budget)
-  updateRegenerationBudget();
-  
-  // Store the start time
-  regenerationStartTime = millis();
-  
-  // Set system mode
-  currentSystemMode = SystemMode::Regenerate;
-  
-  logMessage("[Regenerate] Regeneration started - Fans: 80%, Dampers: Open, Budget: " + 
-             String(wateringBudget.getBudgetDurationMs() / 1000) + "s");
-}
 
-void onRegenerate() {
-  debugMessage("on regenerate");
-
-  // If we're not currently regenerating, check if it's time to start
-  if (currentSystemMode != SystemMode::Regenerate) {
-    // Priority 1: First time entering regeneration slot - start immediately
-    if (canStartRegeneration) {
-      logMessage("[Regenerate] First time in regeneration slot - starting immediately");
-      startRegeneration();
-      canStartRegeneration = false;  // Clear the flag after using it
-      return;
-    }
-    
-    // Priority 2: Check if it's top of hour for subsequent attempts
-    if (isTopOfHour()) {
-      logMessage("[Regenerate] Top of hour - starting fresh regeneration");
-      startRegeneration();
-      return;
-    } else {
-      logMessage("[Regenerate] Not time to start regeneration yet (not top of hour)");
-      return; // Not time yet
-    }
-  }
-  
-  // We're already regenerating - update budget based on current beforeRH
-  updateRegenerationBudget();
-  
-  // Check if it's time to validate effectiveness
-  if (regenerationStartTime > 0 && millis() - regenerationStartTime >= 10 * 60 * 1000) { // 10 minutes
-    logMessage("[Regenerate] 10+ minutes passed, checking regeneration effectiveness");
-    
-    if (!isRegenerationEffective()) {
-      logMessage("[Regenerate] Regeneration is not effective - stopping and waiting for next hour");
-      off(); // Stop regeneration and wait for next hour
-      regenerationStartTime = 0; // Reset start time
-      return;
-    } else {
-      logMessage("[Regenerate] Regeneration is effective - continuing");
-      // Continue regenerating with current parameters
-    }
-  } else if (regenerationStartTime > 0) {
-    // Less than 10 minutes, continue with current parameters
-    unsigned long remainingMinutes = (10 * 60 * 1000 - (millis() - regenerationStartTime)) / 60000;
-    logMessage("[Regenerate] Continuing regeneration - " + String(remainingMinutes) + " minutes until effectiveness check");
-  }
-}
 
 void onHeat() {
   logMessage("[onHeat] on");
@@ -766,34 +697,49 @@ float getInnerFansSpeed() {
   return currentInnerPWMSpeed;
 }
 
-void setInnerFansSpeed(int percentage = -1) {
-  String message = "[setInnerFansSpeed] ";
+// Helper function to check if sensors are available for cool mode
+bool areCoolSensorsAvailable() {
+  float roomTemp = shtRS485Manager.getRoomTemp();
+  float beforeRH = shtRS485Manager.getBeforeRH();
+  return !isnan(roomTemp) && !isnan(beforeRH);
+}
 
-  if(percentage == -1) { // Auto mode
-    float roomTemp = shtRS485Manager.getRoomTemp();
-    if(isnan(roomTemp)) {
-      ledcWrite(FAN_INNER_CHANNEL, 0); // turn off inner fans
-      logMessage("[setInnerFansSpeed] Room temp not available. Fans turned off.");
-      return;
-    }
+// Helper function to check if sensors are available for regenerate mode
+bool areRegenerateSensorsAvailable() {
+  float beforeRH = shtRS485Manager.getBeforeRH();
+  float afterRH = shtRS485Manager.getAfterRH();
+  return !isnan(beforeRH) && !isnan(afterRH);
+}
 
-    // Calculate PWM percentage based on room temperature
-    if(roomTemp >= 27.0) percentage = 30;
-    else if(roomTemp <= 23.0) percentage = 0;
-    else percentage = (int)mapFloat(roomTemp, 23.0, 27.0, 20.0, 30.0);
-
-    message += "Room temp: " + String(roomTemp, 1) + "°C → ";
+// Helper function to calculate inner fan speed based on room temperature
+int calcInnerFansSpeedByRoomTemp(float roomTemp) {
+  if(isnan(roomTemp)) {
+    logMessage("[calcInnerFansSpeedByRoomTemp] Room temp not available, using fallback value: 25°C");
+    roomTemp = 25.0; // Use 25°C as fallback - middle of the range
   }
 
+  // Calculate PWM percentage based on room temperature
+  int percentage;
+  if(roomTemp >= 27.0) percentage = 30;
+  else if(roomTemp <= 23.0) percentage = 0;
+  else percentage = (int)mapFloat(roomTemp, 23.0, 27.0, 20.0, 30.0);
+
+  // In any case, set max fans speed to 30%, for safety reasons (electrical and noise)
+  percentage = constrain(percentage, 0, 30);
+
+  logMessage("[calcInnerFansSpeedByRoomTemp] Room temp: " + String(roomTemp, 1) + "°C → Fan speed: " + String(percentage) + "%");
+  return percentage;
+}
+
+// Turn on inner fans at specified speed percentage
+void onInnerFans(int speedPercentage) {
   // Convert to duty cycle (0–255 for 8-bit resolution)
-  percentage = constrain(percentage, 0, 100); // just to make sure
-  int duty = map(percentage, 0, 100, 0, 255);
+  speedPercentage = constrain(speedPercentage, 0, 100);
+  int duty = map(speedPercentage, 0, 100, 0, 255);
   ledcWrite(FAN_INNER_CHANNEL, duty);
-
-  currentInnerPWMSpeed = percentage;
-
-  message += "Fan speed: " + String(percentage) + "% (duty " + String(duty) + ")";
-  logMessage(message);
+  currentInnerPWMSpeed = speedPercentage;
+  
+  logMessage("[onInnerFans] Inner fans: " + String(speedPercentage) + "% (duty " + String(duty) + ")");
 }
 
 // ========== update mode =============
@@ -801,118 +747,165 @@ SystemMode lastSelectedMode = SystemMode::Stop;
 void updateSystemMode() {
   if(currentSystemMode == SystemMode::Manual) return; // Manual mode is not controlled by schedule
 
+  // Buffer for log messages
+  char logBuffer[200];
+
+  // Step 1: Get system mode from ScheduleManager
   SystemMode newMode = SystemMode::Stop;
-  
-  // Gets the room temperature
+  if (scheduleManager) {
+    newMode = scheduleManager->getCurrentSystemMode();
+    logMessage("[UpdateSystemMode] ScheduleManager mode: " + SystemModeHelper::toString(newMode) + "; " + getCurrentScheduleInfo());
+  } else {
+    logMessage("[UpdateSystemMode] ScheduleManager not available, using default mode");
+  }
+
+  // Step 2: Check if experiment should override (highest priority)
+  if (experimentManager.isExperimentTime()) {
+    newMode = SystemMode::Experiment;
+    logMessage("[UpdateSystemMode] Experiment active, overriding mode to Experiment");
+  }
+
+  // Step 3: Get sensor data
   float roomTemp = shtRS485Manager.getRoomTemp();
-  if(isnan(roomTemp)) roomTemp = shtRS485Manager.getAfterTemp(); // room and after are very similar
+  float beforeRH = shtRS485Manager.getBeforeRH();
+  float afterRH = shtRS485Manager.getAfterRH();
 
-  //if(isnan(roomTemp)) { // if no sensor is available, check for time entry
-  // gets current time
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    logMessage("[UpdateSystemMode] Failed to get local time");
-    return; // <<<<<<<<<<<<<<<<============================= TBD: handle this case better
-  }
-
-  uint8_t dow = timeinfo.tm_wday; // 0 = Sunday
-  uint16_t currentMinutes = timeinfo.tm_hour * 60 + timeinfo.tm_min;
-
-  // looking for current time schedualing entry
-  for (const auto& entry : modeSchedule) {
-    if (entry.dayOfWeek != dow) continue;
-
-    uint16_t start = entry.startHour * 60 + entry.startMin;
-    uint16_t end   = entry.endHour   * 60 + entry.endMin;
-
-    if (currentMinutes >= start && currentMinutes < end) {
-      newMode = entry.mode;
-      logMessage("[UpdateSystemMode] Schedule entry found: " + SystemModeHelper::toString(newMode));
-      break; // Stop at first match
+  // Step 4: Validate mode based on sensor data (if available)
+  if (newMode == SystemMode::Cool) {
+    if (!isnan(roomTemp) && roomTemp < START_COOLING_DEG) {
+      newMode = SystemMode::Stop;
+      logMessage("[UpdateSystemMode] Room temperature too low for cooling: " + String(roomTemp) + "°C");
+    }
+  } else if (newMode == SystemMode::Heat) {
+    if (!isnan(roomTemp) && roomTemp > START_HEATING_DEG) {
+      newMode = SystemMode::Stop;
+      logMessage("[UpdateSystemMode] Room temperature too high for heating: " + String(roomTemp) + "°C");
     }
   }
 
-  if(newMode == SystemMode::Cool) { // If we got the cool mode, we can decide based on room temperature
-    if(roomTemp >= START_COOLING_DEG) {
-      newMode = SystemMode::Cool; // If room temperature is high enough, start cooling
-    } else {
-      newMode = SystemMode::Stop; // If temperature is low, stop the system
-      logMessage("[UpdateSystemMode] Room temperature is too low for cooling: " + String(roomTemp) + "°C");
-    }
-  } else if(newMode == SystemMode::Heat) { // If we got the heat mode, we can decide based on room temperature
-    if(roomTemp <= START_HEATING_DEG) {
-      newMode = SystemMode::Heat; // If room temperature is low enough, start heating
-    } else {
-      newMode = SystemMode::Stop; // If temperature is high, stop the system
-      logMessage("[UpdateSystemMode] Room temperature is too high for heating: " + String(roomTemp) + "°C");
-    }
-  } else if(newMode == SystemMode::Regenerate) { // If we got the regenerate mode, check if we can start regeneration
-    // Regeneration mode is scheduled - the onRegenerate() function will handle the actual start logic
-    // based on whether it's the top of the hour and other conditions
-  }
-
-  // Will be true only if the mode has changed
+  // Step 5: Log mode change
   if (newMode != currentSystemMode && lastSelectedMode != newMode) {
-    // lastSelectedMode is just to make sure i print this only once
     lastSelectedMode = newMode;
-    String message = "[System] Mode changed to " + SystemModeHelper::toString(newMode) + "\n";
-    logMessage(message);
+    logMessage("[System] Mode changed to " + SystemModeHelper::toString(newMode));
   }
 
-  // float beforeRH = NAN;
-  // float afterRH = NAN;
+  // Step 6: Calculate system parameters and call setSystemMode
+  AirValveMode airMode;
+  int fanSpeed;
+  WateringMode waterMode;
+  int innerFanSpeed;
+  int drippersBudgetSeconds;
 
-  // // Check the sprinklers mode
-  // if (newMode == SystemMode::Cool) {
-  //   // get before humidity and after humidity for sprinklers decision
-  //   beforeRH = shtRS485Manager.getBeforeRH();
-  //   afterRH = shtRS485Manager.getAfterRH();
+  switch(newMode) {
+    case SystemMode::Experiment: {
+      // Get parameters from experiment manager
+      fanSpeed = experimentManager.getCurrentFanSpeed();
+      innerFanSpeed = experimentManager.getCurrentInnerFanSpeed();
+      drippersBudgetSeconds = experimentManager.getCurrentWaterBudget();
+      airMode = experimentManager.getCurrentDampersState() ? AirValveMode::Open : AirValveMode::Close;
+      waterMode = WateringMode::On; // Always enable watering in experiments
+      logMessage("[UpdateSystemMode] Experiment mode - EXPERIMENT-BASED: Fan=" + String(fanSpeed) + 
+                 "%, Inner=" + String(innerFanSpeed) + "%, Air=" + String(airMode == AirValveMode::Open ? "Open" : "Close") + 
+                 ", Budget=" + String(drippersBudgetSeconds) + "s");
+      break;
+    }
+    
+    case SystemMode::Cool: {
+      if (areCoolSensorsAvailable()) {
+        // Sensor-based control - we have room temp and before RH
+        airMode = getAirModeByRoom();
+        fanSpeed = (int)mapFloat(roomTemp, 25.0, 29.0, 20.0, 40.0);
+        fanSpeed = constrain(fanSpeed, 20, 40);
+        waterMode = (beforeRH < 95) ? WateringMode::On : WateringMode::Off;
+        innerFanSpeed = calcInnerFansSpeedByRoomTemp(roomTemp); // Calculate based on room temp
+        drippersBudgetSeconds = map(fanSpeed, 20, 40, 10, 35);
+        sprintf(logBuffer, "[UpdateSystemMode] Cool mode - SENSOR-BASED: Temp=%.1f°C, BeforeRH=%.1f%%, Fan=%d%%, Inner=%d%%", 
+                roomTemp, beforeRH, fanSpeed, innerFanSpeed);
+        logMessage(String(logBuffer));
+      } else {
+        // Schedule-based control - missing room temp or before RH
+        airMode = scheduleManager->getCurrentAirMode();
+        fanSpeed = scheduleManager->getCurrentFanSpeed();
+        waterMode = WateringMode::On; // Default to water on for cooling
+        innerFanSpeed = scheduleManager->getCurrentInnerFanSpeed();
+        drippersBudgetSeconds = scheduleManager->getCurrentDrippersBudgetSeconds();
+        sprintf(logBuffer, "[UpdateSystemMode] Cool mode - SCHEDULE-BASED (missing sensors): %s", 
+                scheduleManager->getCurrentScheduleInfo().c_str());
+        logMessage(String(logBuffer));
+      }
+      break;
+    }
+    
+    case SystemMode::Regenerate: {
+      if (areRegenerateSensorsAvailable()) {
+        // Sensor-based control - we have before RH and after RH
+        airMode = AirValveMode::Open;
+        fanSpeed = getCurrentRegenerationFanSpeed();
+        waterMode = WateringMode::On;
+        innerFanSpeed = calcInnerFansSpeedByRoomTemp(roomTemp); // Calculate based on room temp
+        updateRegenerationBudget(); // Set budget based on beforeRH
+        drippersBudgetSeconds = wateringBudget.getBudgetDurationMs() / 1000;
+        sprintf(logBuffer, "[UpdateSystemMode] Regenerate mode - SENSOR-BASED: BeforeRH=%.1f%%, AfterRH=%.1f%%, Fan=%d%%, Inner=%d%%", 
+                beforeRH, afterRH, fanSpeed, innerFanSpeed);
+        logMessage(String(logBuffer));
+      } else {
+        // Schedule-based control - missing before RH or after RH
+        airMode = scheduleManager->getCurrentAirMode();
+        fanSpeed = scheduleManager->getCurrentFanSpeed();
+        waterMode = WateringMode::On;
+        innerFanSpeed = scheduleManager->getCurrentInnerFanSpeed();
+        drippersBudgetSeconds = scheduleManager->getCurrentDrippersBudgetSeconds();
+        sprintf(logBuffer, "[UpdateSystemMode] Regenerate mode - SCHEDULE-BASED (missing sensors): %s", 
+                scheduleManager->getCurrentScheduleInfo().c_str());
+        logMessage(String(logBuffer));
+      }
+      break;
+    }
+    
+    case SystemMode::Heat: {
+      // Heat mode - use schedule parameters
+      airMode = AirValveMode::Close; // Heat mode typically uses closed dampers
+      fanSpeed = scheduleManager ? scheduleManager->getCurrentFanSpeed() : 50;
+      waterMode = WateringMode::Off; // No water for heating
+      if (!isnan(roomTemp)) {
+        innerFanSpeed = calcInnerFansSpeedByRoomTemp(roomTemp); // Calculate based on room temp
+        sprintf(logBuffer, "[UpdateSystemMode] Heat mode - SENSOR-BASED: Temp=%.1f°C, Inner=%d%%", 
+                roomTemp, innerFanSpeed);
+        logMessage(String(logBuffer));
+      } else {
+        innerFanSpeed = scheduleManager ? scheduleManager->getCurrentInnerFanSpeed() : 0;
+        logMessage("[UpdateSystemMode] Heat mode - SCHEDULE-BASED (no room temp)");
+      }
+      drippersBudgetSeconds = 0;
+      break;
+    }
+    
+    case SystemMode::Stop:
+    default: {
+      airMode = AirValveMode::Close;
+      fanSpeed = 0;
+      waterMode = WateringMode::Off;
+      innerFanSpeed = 0;
+      drippersBudgetSeconds = 0;
+      logMessage("[UpdateSystemMode] Stop mode - SYSTEM-OFF: All systems disabled");
+      break;
+    }
+  }
 
-  //   if (!isnan(beforeRH) && !isnan(afterRH) && beforeRH <= 92 && afterRH <= 92) {
-  //     desiredSprinklersMode = WateringMode::On; // Turn on sprinklers if before RH is low
-  //   } else {
-  //     desiredSprinklersMode = WateringMode::Off; // Turn off sprinklers if before RH is high
-  //   }
-  // } 
-
-  // If the system is stopping, save the last after humidity
-  if(currentSystemMode != SystemMode::Stop && newMode == SystemMode::Stop) {
+  // Step 7: Handle special cases
+  if (currentSystemMode != SystemMode::Stop && newMode == SystemMode::Stop) {
     lastAfterHumidity = shtRS485Manager.getAfterRH();
   }
-  // If the system was already in Stop mode, check if ambiant RH is high enough to regenerate the mattress
-  // if(currentSystemMode == SystemMode::Stop) {
-  //   float ambiantRH = shtRS485Manager.getAmbiantRH();
-  //   if(!isnan(ambiantRH) && !isnan(lastAfterHumidity) && ambiantRH > lastAfterHumidity + 5) {
-  //     newMode = SystemMode::Regenerate; // If ambiant RH is high enough, regenerate the mattress
-  //   }
-  // }
 
-  // Reset regeneration flag when exiting regeneration time slot
-  if (currentSystemMode == SystemMode::Regenerate && newMode != SystemMode::Regenerate) {
-    canStartRegeneration = true;  // Reset to true for next regeneration slot
-    logMessage("[UpdateSystemMode] Exiting regeneration time slot - resetting regeneration flag");
-  }
-    
-  switch(newMode) {
-    case SystemMode::Regenerate:
-      onRegenerate();
-      break;
-    case SystemMode::Cool:
-      onCool();
-      break;
-    case SystemMode::Heat:
-      onHeat();
-      break;
-    case SystemMode::Stop:
-      off();
-      break;
-    default:
-      off();
-      break;
+  // Step 8: Call setSystemMode with all parameters
+  if(newMode != SystemMode::Stop) {
+    setSystemMode(airMode, fanSpeed, waterMode, innerFanSpeed, drippersBudgetSeconds);
+  } else {
+    off();
   }
 
-  // Update inner fans speed
-  setInnerFansSpeed();
+  // Step 9: Update the current system mode
+  currentSystemMode = newMode;
 }
 
 void tickDrippers() {
@@ -980,36 +973,29 @@ void PrintSensors(){
 
   // RS485 SHT31 sensors
   Serial.println("RS485 SHT31 sensors:");
-  Serial.print("Ambiant: Temp = " + (String)shtRS485Manager.getAmbiantTemp());
-  Serial.println("; RH = " + (String)shtRS485Manager.getAmbiantRH());
-  Serial.print("Before: Temp = " + (String)shtRS485Manager.getBeforeTemp());
-  Serial.println("; RH = " + (String)shtRS485Manager.getBeforeRH());
-  Serial.print("After: Temp= " + (String)shtRS485Manager.getAfterTemp());
-  Serial.println("; RH = " + (String)shtRS485Manager.getAfterRH());
-  Serial.print("Room: Temp = " + (String)shtRS485Manager.getRoomTemp());
-  Serial.println("; RH = " + (String)shtRS485Manager.getRoomRH());
+  float ambiantTemp = shtRS485Manager.getAmbiantTemp();
+  float ambiantRH = shtRS485Manager.getAmbiantRH();
+  float beforeTemp = shtRS485Manager.getBeforeTemp();
+  float beforeRH = shtRS485Manager.getBeforeRH();
+  float afterTemp = shtRS485Manager.getAfterTemp();
+  float afterRH = shtRS485Manager.getAfterRH();
+  float roomTemp = shtRS485Manager.getRoomTemp();
+  float roomRH = shtRS485Manager.getRoomRH();
+  
+  Serial.print("Ambiant: Temp = " + (isnan(ambiantTemp) ? "N/A" : String(ambiantTemp)));
+  Serial.println("; RH = " + (isnan(ambiantRH) ? "N/A" : String(ambiantRH)));
+  Serial.print("Before: Temp = " + (isnan(beforeTemp) ? "N/A" : String(beforeTemp)));
+  Serial.println("; RH = " + (isnan(beforeRH) ? "N/A" : String(beforeRH)));
+  Serial.print("After: Temp= " + (isnan(afterTemp) ? "N/A" : String(afterTemp)));
+  Serial.println("; RH = " + (isnan(afterRH) ? "N/A" : String(afterRH)));
+  Serial.print("Room: Temp = " + (isnan(roomTemp) ? "N/A" : String(roomTemp)));
+  Serial.println("; RH = " + (isnan(roomRH) ? "N/A" : String(roomRH)));
   
      // Show regeneration status if applicable
-   if (currentSystemMode == SystemMode::Regenerate && regenerationStartTime > 0) {
-     unsigned long regenerationTime = (millis() - regenerationStartTime) / 1000; // in seconds
-     Serial.println("Regeneration Status: Active for " + String(regenerationTime) + " seconds");
+   if (currentSystemMode == SystemMode::Regenerate) {
+     Serial.println("Regeneration Status: Active");
      Serial.println("Regeneration Budget: " + String(wateringBudget.getBudgetDurationMs() / 1000) + "s");
-     if (regenerationTime >= 600) { // 10 minutes
-       Serial.println("Regeneration: Ready for effectiveness check");
-     } else {
-       unsigned long remainingTime = 600 - regenerationTime;
-       Serial.println("Regeneration: " + String(remainingTime) + " seconds until effectiveness check");
-     }
-   } else if (currentSystemMode == SystemMode::Regenerate) {
-     Serial.println("Regeneration Status: Starting up...");
    }
-   
-   // Show regeneration slot status
-   if (canStartRegeneration) {
-    Serial.println("Regeneration Slot: Can start regeneration - will start immediately");
-  } else {
-    Serial.println("Regeneration Slot: Regeneration already attempted - waiting for top of hour");
-  }
   
   // Show OTA status if applicable
   if (isFirstBootAfterOTA && !firmwareValidated) {
@@ -1133,37 +1119,19 @@ void sendTelemetry() {
   // Example: -1234 means: cooling mode, fans at medium speed, water is open, dampers are open, and the fans are intake (reverse).
   // The code is sent as a string, so it can be easily parsed by the server.
   // The code is also logged to S3 for long-term storage.
-  otaManager.sendTelemetry("System_Status_Code", String(getSystemStatusCode()));
-  logToS3("System", "system", "cooler", "mode", getSystemStatusCode()); // mode data must be in location "cooler"
-
-  otaManager.sendTelemetry("System_Mode", SystemModeHelper::toString(currentSystemMode));
-  otaManager.sendTelemetry("Fans_Speed", currentPWMSpeed);
-  otaManager.sendTelemetry("Water_Mode", currentWaterMode == WateringMode::On ? "Open" : "Close");
+  logMode();
   otaManager.sendTelemetry("Drippers_Actual", currentDrippersMode == WateringMode::On ? "Open" : "Close");
   otaManager.sendTelemetry("Drippers_Slot", (int)(wateringBudget.getSlotDurationMs() / 1000));
-  otaManager.sendTelemetry("Drippers_Budget", (int)(wateringBudget.getBudgetDurationMs() / 1000));
-  otaManager.sendTelemetry("Dampers_Status", currentAirMode == AirValveMode::Open ? "Open" : "Close");
   otaManager.sendTelemetry("Dampers_Actual", currentAirMode == AirValveMode::Open ? "Open" : "Close");
   otaManager.sendTelemetry("Sprinklers_Mode", desiredSprinklersMode == WateringMode::On ? "Open" : "Close");
   otaManager.sendTelemetry("Sprinklers_Actual", currentSprinklersMode == WateringMode::On ? "Open" : "Close");
   otaManager.sendTelemetry("Sprinklers_Slot", (int)(sprinklersBudget.getSlotDurationMs() / 1000));
-  otaManager.sendTelemetry("Sprinklers_Budget", (int)(sprinklersBudget.getBudgetDurationMs() / 1000));
 
   // Regeneration status telemetry
-  if (currentSystemMode == SystemMode::Regenerate && regenerationStartTime > 0) {
-    unsigned long regenerationTime = (millis() - regenerationStartTime) / 1000; // in seconds
-    otaManager.sendTelemetry("Regeneration_Active_Time", (int)regenerationTime);
-    otaManager.sendTelemetry("Regeneration_Ready_For_Check", regenerationTime >= 600 ? "Yes" : "No");
-    if (regenerationTime < 600) {
-      unsigned long remainingTime = 600 - regenerationTime;
-      otaManager.sendTelemetry("Regeneration_Time_Until_Check", (int)remainingTime);
-    }
-  } else if (currentSystemMode == SystemMode::Regenerate) {
-    otaManager.sendTelemetry("Regeneration_Active_Time", 0);
-    otaManager.sendTelemetry("Regeneration_Ready_For_Check", "Starting");
+  if (currentSystemMode == SystemMode::Regenerate) {
+    otaManager.sendTelemetry("Regeneration_Status", "Active");
   } else {
-    otaManager.sendTelemetry("Regeneration_Active_Time", 0);
-    otaManager.sendTelemetry("Regeneration_Ready_For_Check", "N/A");
+    otaManager.sendTelemetry("Regeneration_Status", "Inactive");
   }
 
   int fanAdcRaw = analogRead(PIN_FAN_INNER_ADC);
@@ -1234,11 +1202,17 @@ void setSolenoidStatus(bool status) {
   setWater(currentWaterMode);
 }
 
+void restartDevice() {
+  logMessage("[restartDevice] Restarting ESP32...");
+  delay(1000); // Give time for log message to be sent
+  ESP.restart();
+}
+
 int getWaterSlot() { // minutes
   return (int)(wateringBudget.getSlotDurationMs() / 1000 / 60);
 }
 
-void setWaterSlot(int duration) {
+void setWaterSlot(int duration) { // minutes
   currentSystemMode = SystemMode::Manual;
   manualWaterMode = WateringMode::On;
   wateringBudget.setSlotDurationMs(duration * 60 * 1000);
@@ -1252,6 +1226,33 @@ void setWaterBudget(int duration) {
   currentSystemMode = SystemMode::Manual;
   manualWaterMode = WateringMode::On;
   wateringBudget.setBudgetDurationMs(duration * 1000);
+}
+
+bool getSprinklersMode() {
+  return desiredSprinklersMode == WateringMode::On;
+}
+
+void setSprinklersMode(bool mode) {
+  currentSystemMode = SystemMode::Manual;
+  desiredSprinklersMode = mode ? WateringMode::On : WateringMode::Off;
+}
+
+int getSprinklersSlot() { // minutes
+  return (int)(sprinklersBudget.getSlotDurationMs() / 1000 / 60);
+}
+
+void setSprinklersSlot(int duration) { // minutes
+  currentSystemMode = SystemMode::Manual;
+  sprinklersBudget.setSlotDurationMs(duration * 1000 * 60);
+}
+
+int getSprinklersBudget() { // seconds
+  return (int)(sprinklersBudget.getBudgetDurationMs() / 1000);
+}
+
+void setSprinklersBudget(int duration) {
+  currentSystemMode = SystemMode::Manual;
+  sprinklersBudget.setBudgetDurationMs(duration * 1000);
 }
 
 bool getSystemAutoMode() {
@@ -1333,7 +1334,7 @@ bool isSystemHealthy() {
   }
   
   // Check if sensors are responding (basic check)
-  if (shtRS485Manager.getAmbiantTemp() == FLOAT_NAN) {
+  if (isnan(shtRS485Manager.getAmbiantTemp())) {
     Serial.println("[OTA-Health] Sensors not responding - system unhealthy");
     return false;
   }
@@ -1504,6 +1505,10 @@ void setup() {
   Serial.println("[Setup] Initializing TimeClient (NTP)");
   struct tm timeInfo = SetupTime();  // This sets the internal time using NTP servers
   timeClient = new TimeClient();
+  
+  // Initialize ScheduleManager
+  scheduleManager = new ScheduleManager(modeSchedule, timeClient);
+  logMessage("[Setup] ScheduleManager initialized");
 
   // Step 2: Initialize RTC over I2C on custom pins (SDA = 7, SCL = 6)
   Serial.println("[Setup] Initializing RTC");
@@ -1568,15 +1573,22 @@ void setup() {
   otaManager.setDampersStatusFunc = setDampersStatus;
   otaManager.getSolenoidStatusFunc = getSolenoidStatus;
   otaManager.setSolenoidStatusFunc = setSolenoidStatus;
+  otaManager.restartDeviceFunc = restartDevice;
   otaManager.getWaterSlotFunc = getWaterSlot;
   otaManager.setWaterSlotFunc = setWaterSlot;
   otaManager.getWaterBudgetFunc = getWaterBudget;
   otaManager.setWaterBudgetFunc = setWaterBudget;
+  otaManager.getSprinklersSlotFunc = getSprinklersSlot;
+  otaManager.setSprinklersSlotFunc = setSprinklersSlot;
+  otaManager.getSprinklersBudgetFunc = getSprinklersBudget;
+  otaManager.setSprinklersBudgetFunc = setSprinklersBudget; 
+  otaManager.getSprinklersModeFunc = getSprinklersMode;
+  otaManager.setSprinklersModeFunc = setSprinklersMode;
   otaManager.getSystemAutoModeFunc = getSystemAutoMode;
   otaManager.setSystemAutoModeFunc = setSystemAutoMode;
   otaManager.getDrippersAutoModeFunc = getDrippersAutoMode;
   otaManager.setDrippersAutoModeFunc = setDrippersAutoMode;
-  otaManager.setInnerFansSpeedFunc = setInnerFansSpeed;
+  otaManager.setInnerFansSpeedFunc = onInnerFans;
   otaManager.getInnerFansSpeedFunc = getInnerFansSpeed;
   otaManager.begin();
   otaManager.sendAttribute("fw_version_actual", CURRENT_FIRMWARE_VERSION);
@@ -1596,8 +1608,6 @@ void setup() {
   // I'm still alive - Reset watchdog to prevent timeout
   esp_task_wdt_reset();
 
-  // Initialize regeneration start time to 0 (no regeneration active)
-  regenerationStartTime = 0;
 
   updateSystemMode();
   PrintSensors();
@@ -1616,6 +1626,7 @@ void loop() {
   
   otaManager.tick();
   shtRS485Manager.tick();
+  experimentManager.tick();
   tick();
 
   // OTA Health Check Logic
@@ -1767,23 +1778,6 @@ void HandleManualControl(){
         int state = stateStr.toInt();
         state ? digitalWrite(pin, HIGH) : digitalWrite(pin, LOW);
     }
-    else if (input.equalsIgnoreCase("reg")) { // REG (REGENERATION) ===========================
-      Serial.println("Set system in REGENERATING mode");
-      onRegenerate();
-    }
-    else if (input.equalsIgnoreCase("regeff")) { // REGENERATION EFFECTIVENESS CHECK ===========================
-      Serial.println("Testing regeneration effectiveness check...");
-      if (currentSystemMode == SystemMode::Regenerate) {
-        bool isEffective = isRegenerationEffective();
-        Serial.println("Regeneration effectiveness: " + String(isEffective ? "YES" : "NO"));
-      } else {
-        Serial.println("System is not in regeneration mode");
-      }
-    }
-    else if(input.equalsIgnoreCase("cool")) { // COOL ==============================
-      Serial.println("Set system in COOLING mode");
-      onCool();
-    }
     else if(input.equalsIgnoreCase("heat")) { // HEAT ==================================
       Serial.println("Set system in HEATING mode");
       onHeat();
@@ -1910,15 +1904,74 @@ void HandleManualControl(){
        }
        Serial.println("============================");
      }
-     else if(input.equalsIgnoreCase("regslot")) { // REGENERATION SLOT STATUS =============================
-       Serial.println("=== Regeneration Slot Status ===");
-       Serial.printf("First time in regeneration slot: %s\n", canStartRegeneration ? "YES" : "NO");
-       Serial.printf("Current system mode: %s\n", SystemModeHelper::toString(currentSystemMode).c_str());
-       Serial.printf("Regeneration start time: %lu\n", regenerationStartTime);
-       Serial.println("================================");
+     else if(input.equalsIgnoreCase("schedule")) { // SCHEDULE INFO =============================
+       Serial.println("=== Current Schedule Information ===");
+       if (scheduleManager) {
+         Serial.println(scheduleManager->getCurrentScheduleInfo());
+       } else {
+         Serial.println("ScheduleManager not available");
+       }
+       Serial.println("=====================================");
      }
+    else if (input.startsWith("exp")) {  // EXPERIMENT COMMANDS =============================
+      if (input.equalsIgnoreCase("exp")) {
+        Serial.println("Experiment commands:");
+        Serial.println("  exp start <experiment_name> - Start specific experiment");
+        Serial.println("  exp stop                    - Stop current experiment");
+        Serial.println("  exp pause                   - Pause current experiment");
+        Serial.println("  exp resume                  - Resume current experiment");
+        Serial.println("  exp status                  - Show experiment status");
+        Serial.println("  exp list                    - List available experiments");
+      }
+      else if (input.startsWith("exp start")) {
+        String expName = input.substring(9);
+        expName.trim();
+        if (expName.isEmpty()) {
+          Serial.println("Usage: exp start <experiment_name>");
+          Serial.println("Use 'exp list' to see available experiments");
+        } else if (experimentManager.startExperiment(expName)) {
+          Serial.printf("Started experiment: %s\n", expName.c_str());
+        } else {
+          Serial.printf("Failed to start experiment: %s\n", expName.c_str());
+        }
+      }
+      else if (input.equalsIgnoreCase("exp stop")) {
+        if (experimentManager.isExperimentRunning()) {
+          experimentManager.stopExperiment();
+          Serial.println("Experiment stopped");
+        } else {
+          Serial.println("No experiment is currently running");
+        }
+      }
+      else if (input.equalsIgnoreCase("exp pause")) {
+        if (experimentManager.isExperimentRunning()) {
+          experimentManager.pauseExperiment();
+          Serial.println("Experiment paused");
+        } else {
+          Serial.println("No experiment is currently running");
+        }
+      }
+      else if (input.equalsIgnoreCase("exp resume")) {
+        experimentManager.resumeExperiment();
+        Serial.println("Experiment resumed");
+      }
+      else if (input.equalsIgnoreCase("exp status")) {
+        String status = experimentManager.getStatus();
+        Serial.println("=== Experiment Status ===");
+        Serial.println(status);
+        Serial.println("========================");
+      }
+      else if (input.equalsIgnoreCase("exp list")) {
+        Serial.println("=== Available Experiments ===");
+        experimentManager.listExperiments();
+        Serial.println("=============================");
+      }
+      else {
+        Serial.println("Unknown experiment command. Use 'exp' for help.");
+      }
+    }
          else {
-          Serial.println("No such command. use: print, stop, dampers, drip, sprink, reg, regeff, otastatus, otarollback, otavalidate, regslot");
+          Serial.println("No such command. use: print, stop, dampers, drip, sprink, reg, regeff, exp, otastatus, otarollback, otavalidate, regslot, schedule");
      }
   }
 }

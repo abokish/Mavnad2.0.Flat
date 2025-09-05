@@ -22,8 +22,15 @@ public:
   std::function<void(bool)> setSolenoidStatusFunc;
   std::function<int()> getWaterSlotFunc;
   std::function<void(int)> setWaterSlotFunc;
+  std::function<void()> restartDeviceFunc;
   std::function<int()> getWaterBudgetFunc;
   std::function<void(int)> setWaterBudgetFunc;
+  std::function<int()> getSprinklersSlotFunc;
+  std::function<void(int)> setSprinklersSlotFunc;
+  std::function<int()> getSprinklersBudgetFunc;
+  std::function<void(int)> setSprinklersBudgetFunc;
+  std::function<bool()> getSprinklersModeFunc;
+  std::function<void(bool)> setSprinklersModeFunc;
   std::function<bool()> getSystemAutoModeFunc;
   std::function<void(bool)> setSystemAutoModeFunc;
   std::function<bool()> getDrippersAutoModeFunc;
@@ -170,6 +177,30 @@ public:
       setWaterBudgetFunc(budget);
       Serial.printf("[RPC] Set water budget to: %d\n", budget);
 
+    } else if (method == "getSprinklersSlot") {  // ====== getSprinklersSlot
+      int slot = getSprinklersSlotFunc();
+      String response = String(slot);
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
+      Serial.printf("[RPC] Sent sprinklers slot: %d\n", slot);
+
+    } else if (method == "setSprinklersSlot") {  // ======= setSprinklersSlot
+      int slot = doc["params"] | 0;
+      setSprinklersSlotFunc(slot);
+      Serial.printf("[RPC] Set sprinklers slot to: %d\n", slot);
+
+    } else if (method == "getSprinklersBudget") {  // ====== getSprinklersBudget
+      int budget = getSprinklersBudgetFunc();
+      String response = String(budget);
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
+      Serial.printf("[RPC] Sent sprinklers budget: %d\n", budget);
+
+    } else if (method == "setSprinklersBudget") {  // ======= setSprinklersBudget
+      int budget = doc["params"] | 0;
+      setSprinklersBudgetFunc(budget);
+      Serial.printf("[RPC] Set sprinklers budget to: %d\n", budget);
+
     } else if (method == "getSystemAutoMode") {  // ====== getSystemAutoMode
       bool mode = getSystemAutoModeFunc();
       String response = mode ? "true" : "false";
@@ -189,6 +220,18 @@ public:
       m_mqttClient.publish(responseTopic.c_str(), response.c_str());
       Serial.printf("[RPC] Sent drippers auto mode status: %d\n", mode);
 
+    } else if (method == "getSprinklersMode") {  // ====== getSprinklersMode
+      bool mode = getSprinklersModeFunc();
+      String response = mode ? "true" : "false";
+      String responseTopic = "v1/devices/me/rpc/response/" + requestId;
+      m_mqttClient.publish(responseTopic.c_str(), response.c_str());
+      Serial.printf("[RPC] Sent sprinklers mode: %d\n", mode);
+
+    } else if (method == "setSprinklersMode") {  // ======= setSprinklersMode
+      bool mode = doc["params"] | false;
+      setSprinklersModeFunc(mode);
+      Serial.printf("[RPC] Set sprinklers mode to: %d\n", mode);
+
     } else if (method == "setDrippersAutoMode") {  // ======= setDrippersAutoMode
       bool mode = doc["params"] | false;
       setDrippersAutoModeFunc(mode);
@@ -206,6 +249,10 @@ public:
       String responseTopic = "v1/devices/me/rpc/response/" + requestId;
       m_mqttClient.publish(responseTopic.c_str(), response.c_str());
       Serial.printf("[RPC] Get inner fan speed: %d\n", speed);
+
+    } else if (method == "restartDevice") {  // ======= restartDevice
+      restartDeviceFunc();
+      Serial.printf("[RPC] Restarting device...\n");
     
     } else {
       Serial.println("[RPC] Unknown method.");

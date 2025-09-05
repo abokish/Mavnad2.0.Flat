@@ -64,8 +64,8 @@ public:
         // Get the current epoch time
         time_t epochTime = ntpClient->getEpochTime();
 
-        // Convert epoch time to tm structure
-        struct tm *ptm = gmtime(&epochTime);
+        // Convert epoch time to tm structure using local time
+        struct tm *ptm = localtime(&epochTime);
         
         return ptm->tm_hour;
     }
@@ -74,10 +74,22 @@ public:
         // Get the current epoch time
         time_t epochTime = ntpClient->getEpochTime();
 
-        // Convert epoch time to tm structure
-        struct tm *ptm = gmtime(&epochTime);
+        // Convert epoch time to tm structure using local time
+        struct tm *ptm = localtime(&epochTime);
         
         return ptm->tm_min;
+    }
+    
+    int getDayOfWeek(){
+        ntpClient->update();
+        // Get the current epoch time
+        time_t epochTime = ntpClient->getEpochTime();
+
+        // Convert epoch time to tm structure using local time
+        struct tm *ptm = localtime(&epochTime);
+        
+        // tm_wday: 0=Sunday, 1=Monday, ..., 6=Saturday
+        return ptm->tm_wday;
     }
 
     bool getHasClkObtained(){
